@@ -5,9 +5,13 @@ import {
   Typography,
   Box,
   CircularProgress,
+  LinearProgress,
   Snackbar,
-  Alert
+  Alert,
+  Button,
+  Paper
 } from '@mui/material';
+import CancelIcon from '@mui/icons-material/Cancel';
 import MapView from './MapView';
 import ControlPanel from './ControlPanel';
 import api from '../services/api';
@@ -16,6 +20,8 @@ function MainLayout() {
   const [searchPolygon, setSearchPolygon] = useState(null);
   const [segments, setSegments] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentStep, setCurrentStep] = useState('');
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
   const [currentProject, setCurrentProject] = useState(null);
 
@@ -66,29 +72,43 @@ function MainLayout() {
   };
 
   const pollForResults = async (projectId) => {
-    const maxAttempts = 60; // 5 minutes with 5-second intervals
+    const maxAttempts = 150; // 5 minutes with 2-second intervals
     let attempts = 0;
 
     const poll = async () => {
       try {
-        const projectResponse = await api.getProject(projectId);
-        const project = projectResponse.data;
+        const statusResponse = await api.getProjectStatus(projectId);
+        const status = statusResponse.data;
 
-        if (project.status === 'completed') {
+        // Update progress display
+        setProgress(status.progress || 0);
+        setCurrentStep(status.current_step || '');
+
+        if (status.status === 'completed') {
           // Get segments
           const segmentsResponse = await api.getSegments(projectId);
           setSegments(segmentsResponse.data);
           showNotification('Segments calculated successfully!', 'success');
           setLoading(false);
+          setProgress(100);
+          setCurrentStep('Complete');
           return;
-        } else if (project.status === 'failed') {
-          showNotification('Calculation failed: ' + project.error_message, 'error');
+        } else if (status.status === 'failed') {
+          showNotification('Calculation failed: ' + (status.error_message || 'Unknown error'), 'error');
           setLoading(false);
+          setProgress(0);
+          setCurrentStep('Failed');
           return;
-        } else if (project.status === 'processing') {
+        } else if (status.status === 'cancelled') {
+          showNotification('Processing cancelled', 'warning');
+          setLoading(false);
+          setProgress(0);
+          setCurrentStep('Cancelled');
+          return;
+        } else if (status.status === 'processing') {
           attempts++;
           if (attempts < maxAttempts) {
-            setTimeout(poll, 5000); // Poll every 5 seconds
+            setTimeout(poll, 2000); // Poll every 2 seconds
           } else {
             showNotification('Calculation timeout', 'error');
             setLoading(false);
@@ -102,6 +122,20 @@ function MainLayout() {
     };
 
     poll();
+  };
+
+  const handleCancelProcessing = async () => {
+    if (!currentProject) {
+      return;
+    }
+
+    try {
+      await api.cancelProject(currentProject.id);
+      showNotification('Cancellation requested', 'info');
+    } catch (error) {
+      console.error('Error cancelling project:', error);
+      showNotification('Error cancelling: ' + error.message, 'error');
+    }
   };
 
   const handleExportKML = async () => {
@@ -182,10 +216,41 @@ function MainLayout() {
                 zIndex: 1000
               }}
             >
-              <Box sx={{ textAlign: 'center', color: 'white' }}>
-                <CircularProgress color="inherit" />
-                <Typography sx={{ mt: 2 }}>Calculating segments...</Typography>
-              </Box>
+              <Paper
+                sx={{
+                  p: 4,
+                  minWidth: 400,
+                  textAlign: 'center'
+                }}
+              >
+                <Typography variant="h6" gutterBottom>
+                  Processing Segments
+                </Typography>
+
+                <Box sx={{ mt: 3, mb: 2 }}>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    {currentStep || 'Starting...'}
+                  </Typography>
+                  <LinearProgress
+                    variant="determinate"
+                    value={progress}
+                    sx={{ height: 10, borderRadius: 5, mt: 1 }}
+                  />
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    {progress}%
+                  </Typography>
+                </Box>
+
+                <Button
+                  variant="outlined"
+                  color="error"
+                  startIcon={<CancelIcon />}
+                  onClick={handleCancelProcessing}
+                  sx={{ mt: 2 }}
+                >
+                  Cancel
+                </Button>
+              </Paper>
             </Box>
           )}
         </Box>

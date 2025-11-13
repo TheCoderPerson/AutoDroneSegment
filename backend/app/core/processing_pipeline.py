@@ -22,16 +22,24 @@ logger = logging.getLogger(__name__)
 class ProcessingPipeline:
     """Main processing pipeline for segment generation."""
 
-    def __init__(self, project_config: Dict):
+    def __init__(self, project_config: Dict, progress_callback=None):
         """
         Initialize processing pipeline.
 
         Args:
             project_config: Dictionary containing project configuration
+            progress_callback: Optional callback function(step: str, progress: int)
         """
         self.config = project_config
         self.project_id = project_config['project_id']
         self.results = {}
+        self.progress_callback = progress_callback
+        self.cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the processing pipeline."""
+        logger.info(f"Cancellation requested for project {self.project_id}")
+        self.cancelled = True
 
     async def execute(self) -> Dict:
         """
@@ -44,17 +52,32 @@ class ProcessingPipeline:
 
         try:
             # Step 1: CRS Management
+            if self.progress_callback:
+                self.progress_callback("Determining CRS...", 5)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 1: Determining CRS and transforming polygon...")
             utm_epsg, proj_polygon = self._setup_crs()
             self.results['utm_epsg'] = utm_epsg
             self.results['proj_polygon'] = proj_polygon
 
             # Step 2: DEM Processing
+            if self.progress_callback:
+                self.progress_callback("Processing DEM...", 10)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 2: Processing DEM...")
             dem_processor = self._process_dem(proj_polygon, utm_epsg)
             self.results['dem_processor'] = dem_processor
 
             # Step 3: Generate Grid
+            if self.progress_callback:
+                self.progress_callback("Generating grid points...", 15)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 3: Generating candidate grid points...")
             grid_points = self._generate_grid(proj_polygon)
             self.results['grid_points'] = grid_points
@@ -70,6 +93,11 @@ class ProcessingPipeline:
                 logger.info(f"First 5 grid points: {grid_points[:5]}")
 
             # Step 4: Access Filtering
+            if self.progress_callback:
+                self.progress_callback("Filtering by access...", 20)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 4: Filtering points by access...")
             primary_points, secondary_points = self._filter_access(grid_points, utm_epsg)
             self.results['primary_points'] = primary_points
@@ -77,6 +105,11 @@ class ProcessingPipeline:
             logger.info(f"Primary: {len(primary_points)}, Secondary: {len(secondary_points)}")
 
             # Step 5: Calculate Viewsheds
+            if self.progress_callback:
+                self.progress_callback("Calculating viewsheds...", 25)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 5: Calculating viewsheds...")
             visibility_sets = self._calculate_viewsheds(
                 grid_points,
@@ -86,6 +119,11 @@ class ProcessingPipeline:
             self.results['visibility_sets'] = visibility_sets
 
             # Step 6: Generate Segments
+            if self.progress_callback:
+                self.progress_callback("Generating segments...", 80)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 6: Generating segments...")
             segments = self._generate_segments(
                 grid_points,
@@ -98,6 +136,11 @@ class ProcessingPipeline:
             logger.info(f"Generated {len(segments)} segments")
 
             # Step 7: Build Segment Polygons
+            if self.progress_callback:
+                self.progress_callback("Building segment polygons...", 85)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 7: Building segment polygons...")
             segment_polygons = self._build_polygons(
                 segments,
@@ -109,14 +152,27 @@ class ProcessingPipeline:
             self.results['segment_polygons'] = segment_polygons
 
             # Step 8: Transform to WGS84
+            if self.progress_callback:
+                self.progress_callback("Transforming to WGS84...", 90)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 8: Transforming to WGS84...")
             wgs84_segments = self._transform_to_wgs84(segment_polygons, utm_epsg)
             self.results['wgs84_segments'] = wgs84_segments
 
             # Step 9: Validation
+            if self.progress_callback:
+                self.progress_callback("Validating coverage...", 95)
+            if self.cancelled:
+                return {'success': False, 'error': 'Cancelled by user'}
+
             logger.info("Step 9: Validating coverage...")
             validation = self._validate_coverage(wgs84_segments)
             self.results['validation'] = validation
+
+            if self.progress_callback:
+                self.progress_callback("Complete", 100)
 
             logger.info("Processing pipeline completed successfully")
 
@@ -214,11 +270,19 @@ class ProcessingPipeline:
         drone_agl = self.config['drone_agl_altitude']
         max_vlos = self.config['max_vlos_m']
 
+        # Create a progress callback for viewshed calculation
+        def viewshed_progress(completed, total):
+            if self.progress_callback:
+                # Map viewshed progress from 25% to 80% of overall progress
+                progress = 25 + int((completed / total) * 55)
+                self.progress_callback(f"Calculating viewsheds... ({completed}/{total})", progress)
+
         # Calculate viewsheds
         viewshed_results = viewshed_engine.calculate_viewsheds_batch(
             grid_points,
             drone_agl,
-            max_vlos
+            max_vlos,
+            progress_callback=viewshed_progress
         )
 
         # Build visibility sets and filter to polygon

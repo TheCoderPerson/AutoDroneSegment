@@ -21,6 +21,7 @@ router = APIRouter()
 # In-memory storage (replace with database in production)
 projects_db = {}
 segments_db = {}
+pipeline_instances = {}  # Store pipeline instances for cancellation
 
 
 @router.post("/projects", response_model=ProjectResponse)
@@ -162,6 +163,10 @@ async def process_project(project_id: str):
     try:
         project = projects_db[project_id]
 
+        # Initialize progress tracking
+        projects_db[project_id]['progress'] = 0
+        projects_db[project_id]['current_step'] = 'Starting...'
+
         # Build config for pipeline
         config = {
             'project_id': project_id,
@@ -179,9 +184,23 @@ async def process_project(project_id: str):
             'output_dir': f"/app/data/projects/{project_id}/output"
         }
 
+        # Create progress callback
+        def update_progress(step: str, progress: int):
+            projects_db[project_id]['current_step'] = step
+            projects_db[project_id]['progress'] = progress
+            projects_db[project_id]['updated_at'] = datetime.now()
+
         # Execute pipeline
-        pipeline = ProcessingPipeline(config)
+        pipeline = ProcessingPipeline(config, progress_callback=update_progress)
+
+        # Store pipeline instance for cancellation
+        pipeline_instances[project_id] = pipeline
+
         results = await pipeline.execute()
+
+        # Remove pipeline instance after completion
+        if project_id in pipeline_instances:
+            del pipeline_instances[project_id]
 
         if results['success']:
             # Store segments
@@ -190,18 +209,94 @@ async def process_project(project_id: str):
             # Update project
             projects_db[project_id]['status'] = 'completed'
             projects_db[project_id]['segment_count'] = len(results['segments'])
+            projects_db[project_id]['progress'] = 100
+            projects_db[project_id]['current_step'] = 'Complete'
 
             logger.info(f"Project {project_id} processing completed")
 
         else:
-            projects_db[project_id]['status'] = 'failed'
-            projects_db[project_id]['error_message'] = results.get('error')
-            logger.error(f"Project {project_id} processing failed: {results.get('error')}")
+            # Check if it was cancelled
+            error_msg = results.get('error', '')
+            if 'Cancelled' in error_msg:
+                projects_db[project_id]['status'] = 'cancelled'
+            else:
+                projects_db[project_id]['status'] = 'failed'
+            projects_db[project_id]['error_message'] = error_msg
+            logger.error(f"Project {project_id} processing failed: {error_msg}")
 
     except Exception as e:
+        # Remove pipeline instance on error
+        if project_id in pipeline_instances:
+            del pipeline_instances[project_id]
+
         projects_db[project_id]['status'] = 'failed'
         projects_db[project_id]['error_message'] = str(e)
         logger.error(f"Error processing project {project_id}: {e}", exc_info=True)
+
+
+@router.get("/projects/{project_id}/status")
+async def get_project_status(project_id: str):
+    """
+    Get processing status for a project.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Current processing status, progress, and step
+    """
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = projects_db[project_id]
+
+    return {
+        'project_id': project_id,
+        'status': project['status'],
+        'progress': project.get('progress', 0),
+        'current_step': project.get('current_step', ''),
+        'segment_count': project.get('segment_count', 0),
+        'error_message': project.get('error_message')
+    }
+
+
+@router.post("/projects/{project_id}/cancel")
+async def cancel_project(project_id: str):
+    """
+    Cancel processing for a project.
+
+    Args:
+        project_id: Project UUID
+
+    Returns:
+        Cancellation confirmation
+    """
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = projects_db[project_id]
+
+    if project['status'] != 'processing':
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel project with status: {project['status']}"
+        )
+
+    # Cancel the pipeline if it exists
+    if project_id in pipeline_instances:
+        pipeline = pipeline_instances[project_id]
+        pipeline.cancel()
+        logger.info(f"Cancellation requested for project {project_id}")
+
+        return {
+            'message': 'Cancellation requested',
+            'project_id': project_id
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="No active pipeline found for this project"
+        )
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)

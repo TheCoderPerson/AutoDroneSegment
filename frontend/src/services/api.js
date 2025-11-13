@@ -37,6 +37,16 @@ const api = {
     return axios.get(`${API_BASE_URL}/projects/${projectId}`);
   },
 
+  // Get project status (for polling)
+  getProjectStatus: async (projectId) => {
+    return axios.get(`${API_BASE_URL}/projects/${projectId}/status`);
+  },
+
+  // Cancel project processing
+  cancelProject: async (projectId) => {
+    return axios.post(`${API_BASE_URL}/projects/${projectId}/cancel`);
+  },
+
   // Get segments for a project
   getSegments: async (projectId) => {
     return axios.get(`${API_BASE_URL}/projects/${projectId}/segments`);

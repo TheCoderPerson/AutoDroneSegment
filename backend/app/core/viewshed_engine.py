@@ -252,7 +252,8 @@ class ViewshedEngine:
         observer_points: List[Tuple[float, float]],
         observer_height: float,
         max_distance: float,
-        max_workers: int = 4
+        max_workers: int = 4,
+        progress_callback=None
     ) -> List[Tuple[int, Set[int], float]]:
         """
         Calculate viewsheds for multiple points in parallel.
@@ -262,6 +263,7 @@ class ViewshedEngine:
             observer_height: Observer height AGL
             max_distance: Maximum visibility distance
             max_workers: Number of parallel workers
+            progress_callback: Optional callback function(completed, total)
 
         Returns:
             List of tuples: (point_index, visible_cells, visible_area_m2)
@@ -294,6 +296,7 @@ class ViewshedEngine:
             dem_ds = None
 
         results = []
+        total_points = len(observer_points)
 
         # For each point, calculate viewshed
         for idx, (x, y) in enumerate(observer_points):
@@ -306,12 +309,20 @@ class ViewshedEngine:
                 )
                 results.append((idx, visible_cells, visible_area))
 
+                # Report progress
+                if progress_callback and (idx + 1) % 10 == 0:
+                    progress_callback(idx + 1, total_points)
+
                 if (idx + 1) % 50 == 0:
                     logger.info(f"Processed {idx + 1}/{len(observer_points)} viewsheds")
 
             except Exception as e:
                 logger.error(f"Error calculating viewshed for point {idx}: {e}")
                 results.append((idx, set(), 0.0))
+
+        # Final progress update
+        if progress_callback:
+            progress_callback(total_points, total_points)
 
         # Log summary statistics
         total_visible_cells = sum(len(cells) for _, cells, _ in results)
