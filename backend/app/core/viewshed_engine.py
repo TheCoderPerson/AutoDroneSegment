@@ -185,6 +185,13 @@ class ViewshedEngine:
             cell_area = self.dem_processor.get_cell_area()
             visible_area_m2 = len(visible_cells) * cell_area
 
+            # Log for first few points to see if we're getting visibility
+            if point_index < 3:
+                logger.info(
+                    f"Point {point_index}: Viewshed complete - {len(visible_cells)} visible cells, "
+                    f"{visible_area_m2:.1f} m² visible area"
+                )
+
             return visible_cells, visible_area_m2
 
         finally:
@@ -282,7 +289,14 @@ class ViewshedEngine:
                 logger.error(f"Error calculating viewshed for point {idx}: {e}")
                 results.append((idx, set(), 0.0))
 
-        logger.info(f"Completed {len(results)} viewshed calculations")
+        # Log summary statistics
+        total_visible_cells = sum(len(cells) for _, cells, _ in results)
+        non_empty_viewsheds = sum(1 for _, cells, _ in results if len(cells) > 0)
+        logger.info(
+            f"Completed {len(results)} viewshed calculations: "
+            f"{non_empty_viewsheds} with visible cells, "
+            f"{total_visible_cells} total visible cells across all viewsheds"
+        )
 
         return results
 
