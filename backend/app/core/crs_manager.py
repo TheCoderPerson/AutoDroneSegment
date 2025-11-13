@@ -122,6 +122,12 @@ class CRSManager:
             to_epsg=utm_epsg
         )
 
+        # Log polygon bounds
+        orig_geom = shape(search_polygon_geojson)
+        proj_geom = shape(projected_polygon)
+        logger.info(f"Original polygon (WGS84) bounds: {orig_geom.bounds}")
+        logger.info(f"Projected polygon (EPSG:{utm_epsg}) bounds: {proj_geom.bounds}")
+
         return utm_epsg, projected_polygon
 
     @staticmethod

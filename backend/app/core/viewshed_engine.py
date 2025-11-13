@@ -67,18 +67,26 @@ class ViewshedEngine:
         dem_width = dem_ds.RasterXSize
         dem_height = dem_ds.RasterYSize
 
+        # Calculate DEM bounds in geographic coordinates
+        dem_minx = gt[0]
+        dem_maxx = gt[0] + dem_width * gt[1]
+        dem_miny = gt[3] + dem_height * gt[5]
+        dem_maxy = gt[3]
+
         # Convert observer coordinates to pixel coordinates
         pixel_x = int((observer_x - gt[0]) / gt[1])
         pixel_y = int((observer_y - gt[3]) / gt[5])
 
+        # Log detailed info for debugging
+        logger.debug(
+            f"Observer: ({observer_x:.2f}, {observer_y:.2f}), "
+            f"Pixel: ({pixel_x}, {pixel_y}), "
+            f"DEM bounds: X[{dem_minx:.2f}, {dem_maxx:.2f}], Y[{dem_miny:.2f}, {dem_maxy:.2f}], "
+            f"DEM size: {dem_width}x{dem_height}"
+        )
+
         # Check if observer is within DEM bounds
         if pixel_x < 0 or pixel_x >= dem_width or pixel_y < 0 or pixel_y >= dem_height:
-            # Calculate DEM bounds for error message
-            dem_minx = gt[0]
-            dem_maxx = gt[0] + dem_width * gt[1]
-            dem_miny = gt[3] + dem_height * gt[5]
-            dem_maxy = gt[3]
-
             logger.warning(
                 f"Observer at ({observer_x:.2f}, {observer_y:.2f}) is outside DEM bounds. "
                 f"DEM bounds: ({dem_minx:.2f}, {dem_miny:.2f}) to ({dem_maxx:.2f}, {dem_maxy:.2f}). "

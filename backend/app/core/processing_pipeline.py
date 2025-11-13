@@ -60,6 +60,15 @@ class ProcessingPipeline:
             self.results['grid_points'] = grid_points
             logger.info(f"Generated {len(grid_points)} grid points")
 
+            # Log grid point bounds
+            if grid_points:
+                import numpy as np
+                xs = [p[0] for p in grid_points]
+                ys = [p[1] for p in grid_points]
+                logger.info(f"Grid points X range: [{min(xs):.2f}, {max(xs):.2f}]")
+                logger.info(f"Grid points Y range: [{min(ys):.2f}, {max(ys):.2f}]")
+                logger.info(f"First 5 grid points: {grid_points[:5]}")
+
             # Step 4: Access Filtering
             logger.info("Step 4: Filtering points by access...")
             primary_points, secondary_points = self._filter_access(grid_points, utm_epsg)

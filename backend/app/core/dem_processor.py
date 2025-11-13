@@ -62,8 +62,12 @@ class DEMProcessor:
         logger.info("Starting DEM processing...")
 
         # Create buffer around polygon
+        # Use 2x max_vlos_m to ensure adequate coverage for viewshed calculations
+        # at points near the polygon edge
+        buffer_distance = max_vlos_m * 2.0
+        logger.info(f"Buffering polygon by {buffer_distance}m (2x max VLOS)")
         geom = shape(polygon_geojson)
-        buffered_geom = geom.buffer(max_vlos_m)
+        buffered_geom = geom.buffer(buffer_distance)
 
         # Check DEM CRS and transform polygon if needed
         import rasterio
@@ -104,7 +108,14 @@ class DEMProcessor:
         self._build_cell_index(final_dem_path)
 
         self.processed_dem_path = final_dem_path
-        logger.info(f"DEM processing complete: {final_dem_path}")
+
+        # Log final DEM information
+        with rasterio.open(final_dem_path) as src:
+            logger.info(f"DEM processing complete: {final_dem_path}")
+            logger.info(f"Processed DEM CRS: {src.crs}")
+            logger.info(f"Processed DEM bounds: {src.bounds}")
+            logger.info(f"Processed DEM shape: {src.shape}")
+            logger.info(f"Processed DEM transform: {src.transform}")
 
         return final_dem_path
 
