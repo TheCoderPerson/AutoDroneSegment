@@ -123,7 +123,12 @@ Docker installation works on **Windows**, **macOS**, and **Linux**.
 
 2. **Start the services**:
 
-   **All platforms**:
+   **Docker Desktop (newer versions)**:
+   ```bash
+   docker compose up -d
+   ```
+
+   **Older Docker versions or standalone docker-compose**:
    ```bash
    docker-compose up -d
    ```
@@ -134,11 +139,65 @@ Docker installation works on **Windows**, **macOS**, and **Linux**.
    - API Documentation: http://localhost:8000/docs
 
 4. **Stop the services**:
+
+   **Docker Desktop (newer versions)**:
+   ```bash
+   docker compose down
+   ```
+
+   **Older Docker versions**:
    ```bash
    docker-compose down
    ```
 
-> **Windows Note**: If you encounter path issues with Docker volumes on Windows, ensure Docker Desktop has access to your drive in Settings > Resources > File Sharing.
+> **Windows Notes**:
+> - Use `docker compose` (no hyphen) on newer Docker Desktop versions
+> - If you encounter path issues with Docker volumes, ensure Docker Desktop has access to your drive in Settings > Resources > File Sharing
+> - Make sure Docker Desktop is running (check system tray for whale icon)
+
+#### Docker Troubleshooting
+
+**"docker-compose is not recognized" (Windows)**:
+```powershell
+# Use the newer command format (no hyphen)
+docker compose up -d
+
+# If that doesn't work, check Docker installation
+docker --version
+docker compose version
+
+# Make sure Docker Desktop is running
+# Look for the whale icon in your system tray
+```
+
+**Docker Desktop not installed**:
+- Download from: https://docs.docker.com/desktop/install/windows-install/
+- Requires Windows 10/11 with WSL 2
+- After installation, restart your computer
+
+**WSL 2 not enabled (Windows)**:
+```powershell
+# Run in PowerShell as Administrator
+wsl --install
+wsl --set-default-version 2
+
+# Restart your computer
+```
+
+**Docker daemon not running**:
+- Windows: Start Docker Desktop from Start menu
+- Check system tray for Docker whale icon
+- If red, Docker is not running - click to start
+
+**Port conflicts (address already in use)**:
+```powershell
+# Check what's using port 80 or 8000
+netstat -ano | findstr :80
+netstat -ano | findstr :8000
+
+# Change ports in docker-compose.yml if needed
+# For example, change "80:80" to "8080:80" for frontend
+```
 
 ---
 
