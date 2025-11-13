@@ -138,14 +138,11 @@ class ViewshedEngine:
             #             outOfRangeVal, noDataVal, curvCoeff, mode, maxDistance
 
             # Log parameters for first few points
-            # Convert to integer pixel coordinates for GDAL
-            pixel_x_int = int(pixel_x)
-            pixel_y_int = int(pixel_y)
-
+            # Note: GDAL ViewshedGenerate expects GEOGRAPHIC coordinates, not pixel coordinates
             if point_index < 3:
                 logger.info(
                     f"Point {point_index}: Calling GDAL ViewshedGenerate: "
-                    f"geo=({observer_x:.2f}, {observer_y:.2f}), pixel=({pixel_x_int}, {pixel_y_int}), "
+                    f"geo=({observer_x:.2f}, {observer_y:.2f}), pixel=({int(pixel_x)}, {int(pixel_y)}), "
                     f"observer_h={observer_height}m, max_dist={max_distance}m, "
                     f"DEM_size={dem_width}x{dem_height}, "
                     f"DEM_bounds: X[{dem_minx:.2f}, {dem_maxx:.2f}], Y[{dem_miny:.2f}, {dem_maxy:.2f}]"
@@ -156,8 +153,8 @@ class ViewshedEngine:
                 "GTiff",                 # Driver
                 output_path,             # Output file
                 None,                    # Creation options
-                pixel_x_int,             # Observer X pixel
-                pixel_y_int,             # Observer Y pixel
+                observer_x,              # Observer X coordinate (geographic, not pixel!)
+                observer_y,              # Observer Y coordinate (geographic, not pixel!)
                 observer_height,         # Observer height
                 target_height,           # Target height
                 255,                     # Visible value
