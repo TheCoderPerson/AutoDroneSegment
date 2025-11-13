@@ -96,15 +96,34 @@ A comprehensive tool to automatically divide search areas into optimal drone sea
 
 ## 🚀 Installation
 
-### Using Docker (Recommended)
+### Using Docker (Recommended) - Works on All Platforms
+
+Docker installation works on **Windows**, **macOS**, and **Linux**.
+
+#### Prerequisites
+- **Windows**: Install [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
+- **macOS**: Install [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
+- **Linux**: Install [Docker Engine](https://docs.docker.com/engine/install/) and Docker Compose
+
+#### Installation Steps
 
 1. **Clone the repository**:
+
+   **Windows (PowerShell/Command Prompt)**:
+   ```powershell
+   git clone https://github.com/yourusername/AutoDroneSegment.git
+   cd AutoDroneSegment
+   ```
+
+   **macOS/Linux**:
    ```bash
    git clone https://github.com/yourusername/AutoDroneSegment.git
    cd AutoDroneSegment
    ```
 
 2. **Start the services**:
+
+   **All platforms**:
    ```bash
    docker-compose up -d
    ```
@@ -119,28 +138,102 @@ A comprehensive tool to automatically divide search areas into optimal drone sea
    docker-compose down
    ```
 
+> **Windows Note**: If you encounter path issues with Docker volumes on Windows, ensure Docker Desktop has access to your drive in Settings > Resources > File Sharing.
+
+---
+
 ### Manual Installation
+
+<details>
+<summary><b>🐧 Linux (Ubuntu/Debian)</b></summary>
 
 #### Backend Setup
 
 1. **Install GDAL**:
    ```bash
-   # Ubuntu/Debian
    sudo apt-get update
-   sudo apt-get install gdal-bin libgdal-dev python3-gdal
+   sudo apt-get install gdal-bin libgdal-dev python3-gdal python3-pip
+   ```
 
-   # macOS
+2. **Install Python dependencies**:
+   ```bash
+   cd backend
+   pip3 install -r requirements.txt
+   ```
+
+3. **Set up PostgreSQL with PostGIS**:
+   ```bash
+   # Install PostgreSQL and PostGIS
+   sudo apt-get install postgresql postgresql-contrib postgis
+
+   # Start PostgreSQL service
+   sudo systemctl start postgresql
+
+   # Create database
+   sudo -u postgres createdb drone_segments
+   sudo -u postgres psql drone_segments -c "CREATE EXTENSION postgis;"
+
+   # Run schema
+   sudo -u postgres psql drone_segments -f database_schema.sql
+   ```
+
+4. **Configure environment**:
+   ```bash
+   cp .env.example .env
+   nano .env  # Edit with your database credentials
+   ```
+
+5. **Run the backend**:
+   ```bash
+   cd backend
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+#### Frontend Setup
+
+1. **Install Node.js**:
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   ```
+
+2. **Install dependencies and run**:
+   ```bash
+   cd frontend
+   npm install
+   npm start
+   ```
+
+</details>
+
+<details>
+<summary><b>🍎 macOS</b></summary>
+
+#### Backend Setup
+
+1. **Install GDAL**:
+   ```bash
+   # Install Homebrew if not already installed
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+   # Install GDAL
    brew install gdal
    ```
 
 2. **Install Python dependencies**:
    ```bash
    cd backend
-   pip install -r requirements.txt
+   pip3 install -r requirements.txt
    ```
 
 3. **Set up PostgreSQL with PostGIS**:
    ```bash
+   # Install PostgreSQL
+   brew install postgresql postgis
+
+   # Start PostgreSQL service
+   brew services start postgresql
+
    # Create database
    createdb drone_segments
    psql drone_segments -c "CREATE EXTENSION postgis;"
@@ -152,7 +245,7 @@ A comprehensive tool to automatically divide search areas into optimal drone sea
 4. **Configure environment**:
    ```bash
    cp .env.example .env
-   # Edit .env with your database credentials
+   nano .env  # Edit with your database credentials
    ```
 
 5. **Run the backend**:
@@ -163,20 +256,153 @@ A comprehensive tool to automatically divide search areas into optimal drone sea
 
 #### Frontend Setup
 
-1. **Install Node dependencies**:
+1. **Install Node.js**:
+   ```bash
+   brew install node
+   ```
+
+2. **Install dependencies and run**:
    ```bash
    cd frontend
    npm install
-   ```
-
-2. **Start development server**:
-   ```bash
    npm start
    ```
 
-3. **Access the application**:
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8000
+</details>
+
+<details>
+<summary><b>🪟 Windows</b></summary>
+
+#### Prerequisites
+
+1. **Install Python 3.10+**:
+   - Download from [python.org](https://www.python.org/downloads/windows/)
+   - ✅ Check "Add Python to PATH" during installation
+
+2. **Install Node.js 18+**:
+   - Download from [nodejs.org](https://nodejs.org/)
+
+3. **Install PostgreSQL with PostGIS**:
+   - Download [PostgreSQL 15](https://www.postgresql.org/download/windows/)
+   - During installation, select PostGIS in Stack Builder
+
+#### Backend Setup
+
+1. **Install GDAL** (Choose one method):
+
+   **Method A: Using Conda (Recommended for Windows)**:
+   ```powershell
+   # Install Miniconda
+   # Download from: https://docs.conda.io/en/latest/miniconda.html
+
+   # Create conda environment
+   conda create -n drone_segments python=3.10
+   conda activate drone_segments
+
+   # Install GDAL
+   conda install -c conda-forge gdal
+   ```
+
+   **Method B: Using OSGeo4W**:
+   ```powershell
+   # Download OSGeo4W installer from: https://trac.osgeo.org/osgeo4w/
+   # During installation, select: gdal, python3-gdal
+
+   # Add to PATH (in PowerShell as Administrator):
+   $env:Path += ";C:\OSGeo4W64\bin"
+   [System.Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::Machine)
+   ```
+
+2. **Install Python dependencies**:
+   ```powershell
+   cd backend
+   pip install -r requirements.txt
+   ```
+
+   If you get GDAL errors:
+   ```powershell
+   # Find your GDAL version
+   gdalinfo --version
+
+   # Install matching GDAL Python bindings
+   pip install GDAL==[version]
+   ```
+
+3. **Set up PostgreSQL with PostGIS**:
+   ```powershell
+   # Using psql (adjust path if needed)
+   # Add PostgreSQL bin to PATH or use full path
+
+   # Create database
+   & "C:\Program Files\PostgreSQL\15\bin\createdb.exe" -U postgres drone_segments
+
+   # Enable PostGIS
+   & "C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d drone_segments -c "CREATE EXTENSION postgis;"
+
+   # Run schema
+   & "C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d drone_segments -f database_schema.sql
+   ```
+
+4. **Configure environment**:
+   ```powershell
+   copy .env.example .env
+   notepad .env  # Edit with your database credentials
+   ```
+
+   Update the DATABASE_URL in `.env`:
+   ```
+   DATABASE_URL=postgresql://postgres:your_password@localhost:5432/drone_segments
+   ```
+
+5. **Run the backend**:
+   ```powershell
+   cd backend
+   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+#### Frontend Setup
+
+1. **Install dependencies and run**:
+   ```powershell
+   cd frontend
+   npm install
+   npm start
+   ```
+
+#### Troubleshooting Windows Issues
+
+**GDAL Import Error**:
+```powershell
+# Make sure GDAL_DATA environment variable is set
+$env:GDAL_DATA = "C:\OSGeo4W64\share\gdal"
+# Or for Conda:
+$env:GDAL_DATA = "$env:CONDA_PREFIX\Library\share\gdal"
+```
+
+**PostgreSQL Connection Error**:
+- Ensure PostgreSQL service is running (check Services app)
+- Verify password in `.env` matches your PostgreSQL installation
+- Check `pg_hba.conf` allows local connections
+
+**Port Already in Use**:
+```powershell
+# Find process using port 8000
+netstat -ano | findstr :8000
+
+# Kill the process (replace PID with actual process ID)
+taskkill /PID [PID] /F
+```
+
+</details>
+
+---
+
+### Access the Application
+
+After installation (Docker or manual):
+- **Frontend**: http://localhost (Docker) or http://localhost:3000 (manual)
+- **Backend API**: http://localhost:8000
+- **API Documentation**: http://localhost:8000/docs
 
 ---
 
