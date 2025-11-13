@@ -62,10 +62,10 @@ class DEMProcessor:
         logger.info("Starting DEM processing...")
 
         # Create buffer around polygon
-        # Use 2x max_vlos_m to ensure adequate coverage for viewshed calculations
-        # at points near the polygon edge
-        buffer_distance = max_vlos_m * 2.0
-        logger.info(f"Buffering polygon by {buffer_distance}m (2x max VLOS)")
+        # Use 4x max_vlos_m to ensure adequate coverage for GDAL's ViewshedGenerate
+        # GDAL has internal validation that requires substantial buffer beyond max_distance
+        buffer_distance = max_vlos_m * 4.0
+        logger.info(f"Buffering polygon by {buffer_distance}m (4x max VLOS)")
         geom = shape(polygon_geojson)
         buffered_geom = geom.buffer(buffer_distance)
 
