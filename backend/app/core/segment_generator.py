@@ -142,8 +142,23 @@ class SegmentGenerator:
         """
         segments = []
         available_points = set(candidate_points)
+        initial_uncovered = len(uncovered_cells)
+        iteration = 0
+
+        logger.info(f"Starting greedy selection with {len(available_points)} candidate points, {initial_uncovered} cells to cover")
 
         while uncovered_cells and available_points:
+            iteration += 1
+
+            # Log progress every 10 iterations
+            if iteration % 10 == 0:
+                coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100
+                logger.info(
+                    f"Greedy iteration {iteration}: {len(segments)} segments selected, "
+                    f"{len(uncovered_cells)} cells remaining ({coverage_pct:.1f}% covered), "
+                    f"{len(available_points)} points available"
+                )
+
             # Find point with maximum coverage of uncovered cells
             best_point = None
             best_coverage = set()
@@ -188,6 +203,13 @@ class SegmentGenerator:
 
             # Remove selected point from available
             available_points.remove(best_point)
+
+        # Log final results
+        coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100 if initial_uncovered > 0 else 0
+        logger.info(
+            f"Greedy selection complete: {len(segments)} segments selected in {iteration} iterations, "
+            f"{len(uncovered_cells)} cells remaining ({coverage_pct:.1f}% covered)"
+        )
 
         return segments
 
