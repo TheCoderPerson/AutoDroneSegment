@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with PostGIS
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: drone_segments_db
+    environment:
+      POSTGRES_DB: drone_segments
+      POSTGRES_USER: drone_user
+      POSTGRES_PASSWORD: drone_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drone_user -d drone_segments"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: drone_segments_backend
+    environment:
+      DATABASE_URL: postgresql://drone_user:drone_password@postgres:5432/drone_segments
+      POSTGIS_URL: postgresql://drone_user:drone_password@postgres:5432/drone_segments
+      DEBUG: "True"
+    volumes:
+      - ./data:/app/data
+      - ./exports:/app/exports
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: drone_segments_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
