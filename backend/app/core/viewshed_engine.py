@@ -173,13 +173,14 @@ class ViewshedEngine:
 
             # Read viewshed results
             viewshed_array = viewshed_ds.GetRasterBand(1).ReadAsArray()
+            viewshed_gt = viewshed_ds.GetGeoTransform()
 
             # Close datasets
             viewshed_ds = None
             dem_ds = None
 
             # Extract visible cell indices
-            visible_cells = self._extract_visible_cells(viewshed_array)
+            visible_cells = self._extract_visible_cells(viewshed_array, viewshed_gt)
 
             # Calculate visible area
             cell_area = self.dem_processor.get_cell_area()
@@ -199,36 +200,50 @@ class ViewshedEngine:
             if os.path.exists(output_path):
                 os.remove(output_path)
 
-    def _extract_visible_cells(self, viewshed_array: np.ndarray) -> Set[int]:
+    def _extract_visible_cells(self, viewshed_array: np.ndarray, viewshed_gt: tuple) -> Set[int]:
         """
         Extract cell IDs of visible cells from viewshed array.
 
+        The viewshed array is typically smaller than the DEM (cropped to max_distance),
+        so we need to map viewshed pixels to DEM cells using geographic coordinates.
+
         Args:
             viewshed_array: 2D numpy array with visibility values
+            viewshed_gt: Geotransform of the viewshed raster
 
         Returns:
-            Set of visible cell IDs
+            Set of visible cell IDs (using DEM's cell indexing)
         """
         visible_cells = set()
 
         # Get indices where visibility is True (value == 255)
         visible_indices = np.where(viewshed_array == 255)
 
-        # Convert 2D indices to cell IDs
-        # NOTE: The viewshed array should match the DEM dimensions
-        height, width = viewshed_array.shape
-        dem_height, dem_width = self.dem_processor.height, self.dem_processor.width
+        # Get DEM transform for coordinate mapping
+        # Rasterio Affine transform: [a, b, c, d, e, f] where
+        # a=pixel_width, c=origin_x, e=pixel_height(negative), f=origin_y
+        dem_transform = self.dem_processor.transform
+        dem_width = self.dem_processor.width
+        dem_height = self.dem_processor.height
 
-        # Log dimension mismatch if any
-        if height != dem_height or width != dem_width:
-            logger.warning(
-                f"Viewshed array dimensions ({height}x{width}) don't match "
-                f"DEM dimensions ({dem_height}x{dem_width})"
-            )
+        # For each visible pixel in viewshed
+        for vs_row, vs_col in zip(visible_indices[0], visible_indices[1]):
+            # Convert viewshed pixel to geographic coordinate (center of pixel)
+            # GDAL geotransform: [origin_x, pixel_width, 0, origin_y, 0, pixel_height]
+            geo_x = viewshed_gt[0] + (vs_col + 0.5) * viewshed_gt[1]
+            geo_y = viewshed_gt[3] + (vs_row + 0.5) * viewshed_gt[5]
 
-        for row, col in zip(visible_indices[0], visible_indices[1]):
-            cell_id = row * width + col
-            visible_cells.add(cell_id)
+            # Convert geographic coordinate to DEM pixel
+            # Rasterio Affine: transform[2]=origin_x, transform[0]=pixel_width
+            #                  transform[5]=origin_y, transform[4]=pixel_height
+            dem_col = int((geo_x - dem_transform[2]) / dem_transform[0])
+            dem_row = int((geo_y - dem_transform[5]) / dem_transform[4])
+
+            # Check if within DEM bounds
+            if 0 <= dem_col < dem_width and 0 <= dem_row < dem_height:
+                # Calculate cell ID using DEM dimensions
+                cell_id = dem_row * dem_width + dem_col
+                visible_cells.add(cell_id)
 
         return visible_cells
 
