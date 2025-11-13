@@ -62,12 +62,30 @@ class ViewshedEngine:
         if dem_ds is None:
             raise ValueError(f"Cannot open DEM: {self.dem_path}")
 
-        # Get geotransform
+        # Get geotransform and dimensions
         gt = dem_ds.GetGeoTransform()
+        dem_width = dem_ds.RasterXSize
+        dem_height = dem_ds.RasterYSize
 
         # Convert observer coordinates to pixel coordinates
         pixel_x = int((observer_x - gt[0]) / gt[1])
         pixel_y = int((observer_y - gt[3]) / gt[5])
+
+        # Check if observer is within DEM bounds
+        if pixel_x < 0 or pixel_x >= dem_width or pixel_y < 0 or pixel_y >= dem_height:
+            # Calculate DEM bounds for error message
+            dem_minx = gt[0]
+            dem_maxx = gt[0] + dem_width * gt[1]
+            dem_miny = gt[3] + dem_height * gt[5]
+            dem_maxy = gt[3]
+
+            logger.warning(
+                f"Observer at ({observer_x:.2f}, {observer_y:.2f}) is outside DEM bounds. "
+                f"DEM bounds: ({dem_minx:.2f}, {dem_miny:.2f}) to ({dem_maxx:.2f}, {dem_maxy:.2f}). "
+                f"Pixel coords: ({pixel_x}, {pixel_y}), DEM size: {dem_width}x{dem_height}"
+            )
+            dem_ds = None
+            return set(), 0.0
 
         # Create output file
         with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
@@ -167,6 +185,31 @@ class ViewshedEngine:
             List of tuples: (point_index, visible_cells, visible_area_m2)
         """
         logger.info(f"Calculating viewsheds for {len(observer_points)} points...")
+
+        # Log DEM information and first few points for debugging
+        dem_ds = gdal.Open(self.dem_path, gdalconst.GA_ReadOnly)
+        if dem_ds:
+            gt = dem_ds.GetGeoTransform()
+            dem_width = dem_ds.RasterXSize
+            dem_height = dem_ds.RasterYSize
+            dem_minx = gt[0]
+            dem_maxx = gt[0] + dem_width * gt[1]
+            dem_miny = gt[3] + dem_height * gt[5]
+            dem_maxy = gt[3]
+
+            logger.info(f"DEM bounds: X({dem_minx:.2f} to {dem_maxx:.2f}), Y({dem_miny:.2f} to {dem_maxy:.2f})")
+            logger.info(f"DEM size: {dem_width} x {dem_height} pixels")
+
+            if len(observer_points) > 0:
+                logger.info(f"First 3 grid points: {observer_points[:3]}")
+                # Check if first point is in bounds
+                x, y = observer_points[0]
+                if dem_minx <= x <= dem_maxx and dem_miny <= y <= dem_maxy:
+                    logger.info("✓ First point is within DEM bounds")
+                else:
+                    logger.error(f"✗ First point ({x:.2f}, {y:.2f}) is OUTSIDE DEM bounds!")
+
+            dem_ds = None
 
         results = []
 
