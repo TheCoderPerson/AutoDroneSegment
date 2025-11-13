@@ -4,6 +4,7 @@ FastAPI routes for project and segment management.
 import os
 import uuid
 import json
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -38,6 +39,7 @@ async def create_project(project: ProjectCreate):
         project_id = str(uuid.uuid4())
 
         # Store project
+        now = datetime.now()
         project_data = {
             'id': project_id,
             'name': project.name,
@@ -51,8 +53,8 @@ async def create_project(project: ProjectCreate):
             'grid_spacing_m': project.grid_spacing_m,
             'segment_count': 0,
             'total_area_acres': None,
-            'created_at': None,
-            'updated_at': None,
+            'created_at': now,
+            'updated_at': now,
             'error_message': None
         }
 
