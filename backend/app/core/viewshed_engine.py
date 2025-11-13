@@ -74,26 +74,29 @@ class ViewshedEngine:
             output_path = tmp.name
 
         try:
-            # GDAL Viewshed options
-            options = gdal.ViewshedOptions(
-                observerHeight=observer_height,
-                targetHeight=target_height,
-                maxDistance=max_distance,
-                visibleVal=255,
-                invisibleVal=0,
-                outOfRangeVal=0,
-                noDataVal=0
-            )
+            # Get the band
+            band = dem_ds.GetRasterBand(1)
 
-            # Calculate viewshed
+            # Use GDAL ViewshedGenerate with older API (compatible with GDAL 3.4)
+            # Parameters: band, driver, output, creationOptions, x, y,
+            #             observerHeight, targetHeight, visibleVal, invisibleVal,
+            #             outOfRangeVal, noDataVal, curvCoeff, mode, maxDistance
             viewshed_ds = gdal.ViewshedGenerate(
-                dem_ds,
-                "GTiff",
-                output_path,
-                [None],  # No creation options
-                pixel_x,
-                pixel_y,
-                options
+                band,                    # Source band
+                "GTiff",                 # Driver
+                output_path,             # Output file
+                None,                    # Creation options
+                pixel_x,                 # Observer X pixel
+                pixel_y,                 # Observer Y pixel
+                observer_height,         # Observer height
+                target_height,           # Target height
+                255,                     # Visible value
+                0,                       # Invisible value
+                0,                       # Out of range value
+                0,                       # NoData value
+                1.0,                     # Curvature coefficient (1.0 for standard Earth curvature)
+                gdal.GVM_Edge,          # Mode (check edges)
+                max_distance            # Maximum distance
             )
 
             if viewshed_ds is None:
