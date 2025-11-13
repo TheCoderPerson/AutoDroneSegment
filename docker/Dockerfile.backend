@@ -1,5 +1,5 @@
 # Backend Dockerfile for Drone Search Segment Planning Tool
-FROM osgeo/gdal:ubuntu-full-3.8.0
+FROM osgeo/gdal:ubuntu-small-latest
 
 # Set working directory
 WORKDIR /app
