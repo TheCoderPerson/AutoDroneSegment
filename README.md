@@ -121,7 +121,12 @@ Docker installation works on **Windows**, **macOS**, and **Linux**.
    cd AutoDroneSegment
    ```
 
-2. **Start the services**:
+2. **Start Docker Desktop** (Windows/macOS users):
+   - **Windows**: Open Docker Desktop from Start menu, wait for whale icon in system tray
+   - **macOS**: Open Docker Desktop from Applications, wait for whale icon in menu bar
+   - **Verify it's running**: `docker --version` should work without errors
+
+3. **Start the services**:
 
    **Docker Desktop (newer versions)**:
    ```bash
@@ -133,12 +138,12 @@ Docker installation works on **Windows**, **macOS**, and **Linux**.
    docker-compose up -d
    ```
 
-3. **Access the application**:
+4. **Access the application**:
    - Frontend: http://localhost
    - Backend API: http://localhost:8000
    - API Documentation: http://localhost:8000/docs
 
-4. **Stop the services**:
+5. **Stop the services**:
 
    **Docker Desktop (newer versions)**:
    ```bash
@@ -157,6 +162,16 @@ Docker installation works on **Windows**, **macOS**, and **Linux**.
 
 #### Docker Troubleshooting
 
+**"The system cannot find the file specified" or "Cannot connect to Docker daemon"**:
+This means **Docker Desktop is not running**!
+
+**Solution**:
+1. Press **Windows key** and search for "Docker Desktop"
+2. Click to open Docker Desktop
+3. Wait for the **whale icon** to appear in your system tray (bottom-right)
+4. Icon should be steady, not animated - this means Docker is ready
+5. Now run: `docker compose up -d`
+
 **"docker-compose is not recognized" (Windows)**:
 ```powershell
 # Use the newer command format (no hyphen)
@@ -165,9 +180,6 @@ docker compose up -d
 # If that doesn't work, check Docker installation
 docker --version
 docker compose version
-
-# Make sure Docker Desktop is running
-# Look for the whale icon in your system tray
 ```
 
 **Docker Desktop not installed**:
