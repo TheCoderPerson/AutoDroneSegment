@@ -189,7 +189,7 @@ class KMLExporter:
             geojson_geom: GeoJSON geometry
 
         Returns:
-            List of (lon, lat) tuples
+            List of (lon, lat) tuples for a single polygon, or list of lists for MultiPolygon
         """
         geom_type = geojson_geom.get('type')
 
@@ -198,8 +198,20 @@ class KMLExporter:
             return [(lon, lat) for lon, lat in coords]
 
         elif geom_type == 'MultiPolygon':
-            # Use first polygon
-            coords = geojson_geom['coordinates'][0][0]
+            # Use the largest polygon from MultiPolygon
+            all_polys = geojson_geom['coordinates']
+            if not all_polys:
+                return []
+
+            # Find polygon with most vertices (proxy for largest area)
+            largest_poly = max(all_polys, key=lambda p: len(p[0]))
+            coords = largest_poly[0]  # Outer ring of largest polygon
+
+            logger.warning(
+                f"MultiPolygon with {len(all_polys)} parts detected in KML export. "
+                f"Using largest polygon only."
+            )
+
             return [(lon, lat) for lon, lat in coords]
 
         return []

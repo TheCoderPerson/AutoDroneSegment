@@ -72,10 +72,33 @@ class PolygonBuilder:
         # Union all cell polygons
         unified_polygon = unary_union(cell_polygons)
 
+        # Log if we got a MultiPolygon
+        from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+        if isinstance(unified_polygon, ShapelyMultiPolygon):
+            logger.debug(
+                f"Segment created MultiPolygon with {len(unified_polygon.geoms)} parts. "
+                f"This may indicate disconnected visible areas."
+            )
+            # If we have multiple parts, keep only the largest to avoid fragmentation
+            # (disconnected cells are likely edge artifacts)
+            largest_poly = max(unified_polygon.geoms, key=lambda p: p.area)
+            unified_polygon = largest_poly
+            logger.debug(f"Using largest polygon part (area: {largest_poly.area:.2f} m²)")
+
         # Clip to search polygon
         from shapely.geometry import shape
         search_poly = shape(search_polygon_geojson)
         clipped_polygon = unified_polygon.intersection(search_poly)
+
+        # Handle MultiPolygon after clipping (keep largest part)
+        from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+        if isinstance(clipped_polygon, ShapelyMultiPolygon):
+            logger.debug(
+                f"Clipping created MultiPolygon with {len(clipped_polygon.geoms)} parts. "
+                f"Using largest part only."
+            )
+            largest_poly = max(clipped_polygon.geoms, key=lambda p: p.area)
+            clipped_polygon = largest_poly
 
         # Simplify to reduce vertex count
         if simplify_tolerance > 0:
