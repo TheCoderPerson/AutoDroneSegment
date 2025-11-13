@@ -75,8 +75,9 @@ class ViewshedEngine:
         dem_maxy = gt[3]
 
         # Convert observer coordinates to pixel coordinates
-        pixel_x = int((observer_x - gt[0]) / gt[1])
-        pixel_y = int((observer_y - gt[3]) / gt[5])
+        # Use float to preserve precision - GDAL may need exact coordinates
+        pixel_x = (observer_x - gt[0]) / gt[1]
+        pixel_y = (observer_y - gt[3]) / gt[5]
 
         # Log detailed info for debugging
         logger.debug(
@@ -86,7 +87,7 @@ class ViewshedEngine:
             f"DEM size: {dem_width}x{dem_height}"
         )
 
-        # Check if observer is within DEM bounds
+        # Check if observer is within DEM bounds (with margin for edge effects)
         if pixel_x < 0 or pixel_x >= dem_width or pixel_y < 0 or pixel_y >= dem_height:
             logger.warning(
                 f"Observer at ({observer_x:.2f}, {observer_y:.2f}) is outside DEM bounds. "
@@ -105,13 +106,31 @@ class ViewshedEngine:
             dem_ds = None
             return set(), 0.0
 
+        # Get the band and check for NoData at observer location
+        band = dem_ds.GetRasterBand(1)
+        nodata_value = band.GetNoDataValue()
+
+        # Read elevation at observer pixel to verify it's valid
+        observer_elevation = band.ReadAsArray(int(pixel_x), int(pixel_y), 1, 1)[0, 0]
+
+        if point_index < 3:
+            logger.info(
+                f"Point {point_index}: Observer elevation={observer_elevation:.2f}m, "
+                f"NoData value={nodata_value}"
+            )
+
+        if nodata_value is not None and observer_elevation == nodata_value:
+            logger.warning(
+                f"Observer at pixel ({pixel_x:.1f}, {pixel_y:.1f}) is on NoData cell"
+            )
+            dem_ds = None
+            return set(), 0.0
+
         # Create output file
         with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
             output_path = tmp.name
 
         try:
-            # Get the band
-            band = dem_ds.GetRasterBand(1)
 
             # Use GDAL ViewshedGenerate with older API (compatible with GDAL 3.4)
             # Parameters: band, driver, output, creationOptions, x, y,
@@ -119,10 +138,14 @@ class ViewshedEngine:
             #             outOfRangeVal, noDataVal, curvCoeff, mode, maxDistance
 
             # Log parameters for first few points
+            # Convert to integer pixel coordinates for GDAL
+            pixel_x_int = int(pixel_x)
+            pixel_y_int = int(pixel_y)
+
             if point_index < 3:
                 logger.info(
                     f"Point {point_index}: Calling GDAL ViewshedGenerate: "
-                    f"geo=({observer_x:.2f}, {observer_y:.2f}), pixel=({pixel_x}, {pixel_y}), "
+                    f"geo=({observer_x:.2f}, {observer_y:.2f}), pixel=({pixel_x_int}, {pixel_y_int}), "
                     f"observer_h={observer_height}m, max_dist={max_distance}m, "
                     f"DEM_size={dem_width}x{dem_height}, "
                     f"DEM_bounds: X[{dem_minx:.2f}, {dem_maxx:.2f}], Y[{dem_miny:.2f}, {dem_maxy:.2f}]"
@@ -133,8 +156,8 @@ class ViewshedEngine:
                 "GTiff",                 # Driver
                 output_path,             # Output file
                 None,                    # Creation options
-                pixel_x,                 # Observer X pixel
-                pixel_y,                 # Observer Y pixel
+                pixel_x_int,             # Observer X pixel
+                pixel_y_int,             # Observer Y pixel
                 observer_height,         # Observer height
                 target_height,           # Target height
                 255,                     # Visible value
