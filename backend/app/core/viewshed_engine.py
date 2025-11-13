@@ -215,7 +215,16 @@ class ViewshedEngine:
         visible_indices = np.where(viewshed_array == 255)
 
         # Convert 2D indices to cell IDs
+        # NOTE: The viewshed array should match the DEM dimensions
         height, width = viewshed_array.shape
+        dem_height, dem_width = self.dem_processor.height, self.dem_processor.width
+
+        # Log dimension mismatch if any
+        if height != dem_height or width != dem_width:
+            logger.warning(
+                f"Viewshed array dimensions ({height}x{width}) don't match "
+                f"DEM dimensions ({dem_height}x{dem_width})"
+            )
 
         for row, col in zip(visible_indices[0], visible_indices[1]):
             cell_id = row * width + col

@@ -232,6 +232,14 @@ class ProcessingPipeline:
             )
             visibility_sets[idx] = filtered_cells
 
+        # Log filtering results
+        total_filtered_cells = sum(len(cells) for cells in visibility_sets.values())
+        non_empty_filtered = sum(1 for cells in visibility_sets.values() if len(cells) > 0)
+        logger.info(
+            f"After filtering to polygon: {non_empty_filtered}/{len(visibility_sets)} viewsheds have cells, "
+            f"{total_filtered_cells} total cells"
+        )
+
         return visibility_sets
 
     def _generate_segments(
@@ -251,6 +259,18 @@ class ProcessingPipeline:
             point = Point(x, y)
             if geom.contains(point):
                 target_cells.add(cell_id)
+
+        logger.info(f"Target cells within polygon: {len(target_cells)}")
+        if target_cells:
+            sample_targets = list(target_cells)[:5]
+            logger.info(f"Sample target cell IDs: {sample_targets}")
+
+        # Log visibility set stats
+        if visibility_sets:
+            first_vis_set = next(iter(visibility_sets.values()))
+            if first_vis_set:
+                sample_visible = list(first_vis_set)[:5]
+                logger.info(f"Sample visible cell IDs from first viewshed: {sample_visible}")
 
         # Access classification
         access_classification = {}
