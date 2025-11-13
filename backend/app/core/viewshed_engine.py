@@ -42,7 +42,8 @@ class ViewshedEngine:
         observer_y: float,
         observer_height: float,
         max_distance: float,
-        target_height: float = 0.0
+        target_height: float = 0.0,
+        point_index: int = -1
     ) -> Tuple[Set[int], float]:
         """
         Calculate viewshed from a single observer point.
@@ -95,6 +96,15 @@ class ViewshedEngine:
             dem_ds = None
             return set(), 0.0
 
+        # Also check if observer is outside geographic bounds
+        if not (dem_minx <= observer_x <= dem_maxx and dem_miny <= observer_y <= dem_maxy):
+            logger.warning(
+                f"Observer at ({observer_x:.2f}, {observer_y:.2f}) is outside DEM geographic bounds: "
+                f"X[{dem_minx:.2f}, {dem_maxx:.2f}], Y[{dem_miny:.2f}, {dem_maxy:.2f}]"
+            )
+            dem_ds = None
+            return set(), 0.0
+
         # Create output file
         with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
             output_path = tmp.name
@@ -107,6 +117,17 @@ class ViewshedEngine:
             # Parameters: band, driver, output, creationOptions, x, y,
             #             observerHeight, targetHeight, visibleVal, invisibleVal,
             #             outOfRangeVal, noDataVal, curvCoeff, mode, maxDistance
+
+            # Log parameters for first few points
+            if point_index < 3:
+                logger.info(
+                    f"Point {point_index}: Calling GDAL ViewshedGenerate: "
+                    f"geo=({observer_x:.2f}, {observer_y:.2f}), pixel=({pixel_x}, {pixel_y}), "
+                    f"observer_h={observer_height}m, max_dist={max_distance}m, "
+                    f"DEM_size={dem_width}x{dem_height}, "
+                    f"DEM_bounds: X[{dem_minx:.2f}, {dem_maxx:.2f}], Y[{dem_miny:.2f}, {dem_maxy:.2f}]"
+                )
+
             viewshed_ds = gdal.ViewshedGenerate(
                 band,                    # Source band
                 "GTiff",                 # Driver
@@ -126,7 +147,9 @@ class ViewshedEngine:
             )
 
             if viewshed_ds is None:
-                raise RuntimeError("Viewshed calculation failed")
+                # Get GDAL error message
+                err = gdal.GetLastErrorMsg()
+                raise RuntimeError(f"Viewshed calculation failed: {err}")
 
             # Read viewshed results
             viewshed_array = viewshed_ds.GetRasterBand(1).ReadAsArray()
@@ -227,7 +250,8 @@ class ViewshedEngine:
                 visible_cells, visible_area = self.calculate_viewshed(
                     x, y,
                     observer_height,
-                    max_distance
+                    max_distance,
+                    point_index=idx
                 )
                 results.append((idx, visible_cells, visible_area))
 
