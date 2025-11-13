@@ -99,21 +99,27 @@ class KMLExporter:
             seq = segment['sequence']
             polygon_geom = segment['polygon']
 
-            coords = self._extract_coordinates(polygon_geom)
+            # Extract all polygon coordinates (handles both Polygon and MultiPolygon)
+            all_coords = self._extract_all_coordinates(polygon_geom)
 
-            if coords:
-                poly = folder.newpolygon(name=f"Segment {seq}")
-                poly.outerboundaryis = coords
+            # Description (shared for all parts)
+            desc = self._build_segment_description(segment)
 
-                # Description
-                desc = self._build_segment_description(segment)
-                poly.description = desc
+            # Style - cycle through colors
+            color = colors[(seq - 1) % len(colors)]
 
-                # Style - cycle through colors
-                color = colors[(seq - 1) % len(colors)]
-                poly.style.linestyle.color = simplekml.Color.black
-                poly.style.linestyle.width = 2
-                poly.style.polystyle.color = simplekml.Color.changealphaint(100, color)
+            # Create a KML polygon for each part
+            for part_idx, coords in enumerate(all_coords):
+                if coords:
+                    part_name = f"Segment {seq}" if len(all_coords) == 1 else f"Segment {seq} Part {part_idx + 1}"
+                    poly = folder.newpolygon(name=part_name)
+                    poly.outerboundaryis = coords
+                    poly.description = desc
+
+                    # Same style for all parts of the same segment
+                    poly.style.linestyle.color = simplekml.Color.black
+                    poly.style.linestyle.width = 2
+                    poly.style.polystyle.color = simplekml.Color.changealphaint(100, color)
 
     def _add_launch_points(self, segments: List[Dict]):
         """Add launch points to KML."""
@@ -180,6 +186,35 @@ class KMLExporter:
 
             # Style
             stats_point.style.iconstyle.icon.href = 'http://maps.google.com/mapfiles/kml/shapes/info.png'
+
+    def _extract_all_coordinates(self, geojson_geom: dict) -> list:
+        """
+        Extract all polygon coordinates from GeoJSON geometry.
+
+        Handles both Polygon and MultiPolygon, returning a list of coordinate lists.
+
+        Args:
+            geojson_geom: GeoJSON geometry
+
+        Returns:
+            List of coordinate lists, one for each polygon
+        """
+        geom_type = geojson_geom.get('type')
+
+        if geom_type == 'Polygon':
+            coords = geojson_geom['coordinates'][0]  # Outer ring
+            return [[(lon, lat) for lon, lat in coords]]
+
+        elif geom_type == 'MultiPolygon':
+            # Extract all polygons
+            all_polys = geojson_geom['coordinates']
+            result = []
+            for poly in all_polys:
+                coords = poly[0]  # Outer ring of this polygon
+                result.append([(lon, lat) for lon, lat in coords])
+            return result
+
+        return []
 
     def _extract_coordinates(self, geojson_geom: dict) -> list:
         """

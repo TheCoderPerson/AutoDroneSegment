@@ -72,52 +72,31 @@ class PolygonBuilder:
         # Union all cell polygons
         unified_polygon = unary_union(cell_polygons)
 
-        # Log if we got a MultiPolygon
+        # Log if we got a MultiPolygon, but DON'T filter parts
+        # Keep all parts to maintain coverage
         from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
         if isinstance(unified_polygon, ShapelyMultiPolygon):
             num_parts = len(unified_polygon.geoms)
-            logger.debug(
-                f"Segment created MultiPolygon with {num_parts} parts. "
-                f"This may indicate disconnected visible areas."
-            )
-            # Only filter out very small disconnected parts (< 1% of total area)
-            # Keep all significant parts to maintain coverage
             total_area = unified_polygon.area
-            significant_polys = [p for p in unified_polygon.geoms if p.area > total_area * 0.01]
-
-            if len(significant_polys) < num_parts:
-                logger.debug(f"Filtering out {num_parts - len(significant_polys)} small polygon parts (< 1% of area)")
-
-            if len(significant_polys) > 1:
-                # Merge significant parts back together
-                unified_polygon = unary_union(significant_polys)
-            elif len(significant_polys) == 1:
-                unified_polygon = significant_polys[0]
-            # else: keep original (all parts were small, but we need something)
+            logger.debug(
+                f"Segment created MultiPolygon with {num_parts} parts, "
+                f"total area {total_area:.2f} m². Keeping all parts."
+            )
+            # Don't filter - keep the full MultiPolygon to maintain coverage
 
         # Clip to search polygon
         from shapely.geometry import shape
         search_poly = shape(search_polygon_geojson)
         clipped_polygon = unified_polygon.intersection(search_poly)
 
-        # Handle MultiPolygon after clipping (keep significant parts)
-        from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+        # Keep MultiPolygon as-is after clipping
         if isinstance(clipped_polygon, ShapelyMultiPolygon):
             num_parts = len(clipped_polygon.geoms)
-            logger.debug(
-                f"Clipping created MultiPolygon with {num_parts} parts."
-            )
-            # Keep all parts > 1% of total clipped area
             total_area = clipped_polygon.area
-            significant_polys = [p for p in clipped_polygon.geoms if p.area > total_area * 0.01]
-
-            if len(significant_polys) < num_parts:
-                logger.debug(f"Filtering out {num_parts - len(significant_polys)} small clipped parts")
-
-            if len(significant_polys) > 1:
-                clipped_polygon = unary_union(significant_polys)
-            elif len(significant_polys) == 1:
-                clipped_polygon = significant_polys[0]
+            logger.debug(
+                f"Clipping created MultiPolygon with {num_parts} parts, "
+                f"total area {total_area:.2f} m². Keeping all parts."
+            )
 
         # Simplify to reduce vertex count
         if simplify_tolerance > 0:
