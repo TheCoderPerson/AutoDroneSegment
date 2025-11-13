@@ -14,7 +14,7 @@ import numpy as np
 import rasterio
 from rasterio.mask import mask
 from rasterio.warp import calculate_default_transform, reproject, Resampling
-from shapely.geometry import shape, box
+from shapely.geometry import shape, box, mapping
 import logging
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,25 @@ class DEMProcessor:
         geom = shape(polygon_geojson)
         buffered_geom = geom.buffer(max_vlos_m)
 
-        # Step 1: Clip DEM to buffered area
+        # Check DEM CRS and transform polygon if needed
+        import rasterio
+        with rasterio.open(self.dem_path) as src:
+            dem_crs = src.crs
+            logger.info(f"DEM CRS: {dem_crs}, Target CRS: EPSG:{target_epsg}")
+
+            # If DEM is in a different CRS than our polygon, transform polygon to DEM CRS for clipping
+            if dem_crs.to_epsg() != target_epsg:
+                logger.info(f"Transforming polygon from EPSG:{target_epsg} to {dem_crs} for clipping")
+                from app.core.crs_manager import CRSManager
+                buffered_geom_dict = mapping(buffered_geom)
+                transformed_geom_dict = CRSManager.transform_geometry(
+                    buffered_geom_dict,
+                    from_epsg=target_epsg,
+                    to_epsg=dem_crs.to_epsg()
+                )
+                buffered_geom = shape(transformed_geom_dict)
+
+        # Step 1: Clip DEM to buffered area (now in DEM's CRS)
         clipped_dem_path = self._clip_dem(buffered_geom, output_dir)
 
         # Step 2: Reproject to target CRS if needed
@@ -95,21 +113,55 @@ class DEMProcessor:
         logger.info("Clipping DEM to search area...")
 
         with rasterio.open(self.dem_path) as src:
-            # Clip the raster
-            out_image, out_transform = mask(src, [geom], crop=True)
-            out_meta = src.meta.copy()
+            # Log DEM information
+            logger.info(f"DEM CRS: {src.crs}")
+            logger.info(f"DEM bounds: {src.bounds}")
+            logger.info(f"DEM shape: {src.shape}")
 
-            out_meta.update({
-                "driver": "GTiff",
-                "height": out_image.shape[1],
-                "width": out_image.shape[2],
-                "transform": out_transform
-            })
+            # Get geometry bounds for logging
+            from shapely.geometry import shape as shapely_shape
+            geom_shape = shapely_shape(geom) if isinstance(geom, dict) else geom
+            logger.info(f"Polygon bounds: {geom_shape.bounds}")
 
-            # Save clipped DEM
-            output_path = os.path.join(output_dir, "dem_clipped.tif")
-            with rasterio.open(output_path, "w", **out_meta) as dest:
-                dest.write(out_image)
+            try:
+                # Clip the raster
+                out_image, out_transform = mask(src, [geom], crop=True)
+
+                # Check if we got any data
+                if out_image.size == 0:
+                    raise ValueError(
+                        "Clipping resulted in empty raster. "
+                        "This usually means the polygon and DEM don't overlap. "
+                        f"DEM CRS: {src.crs}, DEM bounds: {src.bounds}, "
+                        f"Polygon bounds: {geom_shape.bounds}"
+                    )
+
+                out_meta = src.meta.copy()
+
+                out_meta.update({
+                    "driver": "GTiff",
+                    "height": out_image.shape[1],
+                    "width": out_image.shape[2],
+                    "transform": out_transform
+                })
+
+                # Save clipped DEM
+                output_path = os.path.join(output_dir, "dem_clipped.tif")
+                with rasterio.open(output_path, "w", **out_meta) as dest:
+                    dest.write(out_image)
+
+                logger.info(f"Clipped DEM saved: {out_image.shape}")
+
+            except ValueError as e:
+                if "Input shapes do not overlap" in str(e):
+                    logger.error(
+                        f"DEM and polygon do not overlap!\n"
+                        f"DEM CRS: {src.crs}\n"
+                        f"DEM bounds: {src.bounds}\n"
+                        f"Polygon bounds: {geom_shape.bounds}\n"
+                        f"Suggestion: Ensure your DEM covers the search area and both are in compatible coordinate systems."
+                    )
+                raise
 
         return output_path
 
