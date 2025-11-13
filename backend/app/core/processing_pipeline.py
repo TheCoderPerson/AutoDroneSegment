@@ -314,7 +314,7 @@ class ProcessingPipeline:
             grid_points,
             proj_polygon,
             utm_epsg,
-            simplify_tolerance=2.0
+            simplify_tolerance=0.5  # Reduced from 2.0 to preserve coverage
         )
 
         return segment_polygons
