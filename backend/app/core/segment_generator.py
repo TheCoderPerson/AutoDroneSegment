@@ -156,13 +156,13 @@ class SegmentGenerator:
         while uncovered_cells and available_points:
             iteration += 1
 
-            # Report progress every 5 iterations
-            if iteration % 5 == 0 and self.progress_callback:
-                coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100
-                # Map to 80-82% range (narrow range since this is quick)
-                progress = 80 + int(coverage_pct * 0.02)
+            # Report progress every iteration for better user feedback
+            if self.progress_callback:
+                coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100 if initial_uncovered > 0 else 0
+                # Map to 80-84% range (wider range for better visibility)
+                progress = 80 + int(coverage_pct * 0.04)
                 self.progress_callback(
-                    f"Generating segments... ({len(segments)} segments, {coverage_pct:.0f}% covered)",
+                    f"Generating segments... ({len(segments)} segments, {coverage_pct:.0f}% area covered)",
                     progress
                 )
 

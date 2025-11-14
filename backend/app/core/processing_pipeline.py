@@ -371,7 +371,7 @@ class ProcessingPipeline:
         dem_processor
     ):
         """Build polygon geometries for segments."""
-        polygon_builder = PolygonBuilder(dem_processor)
+        polygon_builder = PolygonBuilder(dem_processor, progress_callback=self.progress_callback)
 
         segment_polygons = polygon_builder.build_all_segments(
             segments,
@@ -385,7 +385,7 @@ class ProcessingPipeline:
 
     def _transform_to_wgs84(self, segments, from_epsg):
         """Transform segments to WGS84."""
-        polygon_builder = PolygonBuilder(None)
+        polygon_builder = PolygonBuilder(None, progress_callback=self.progress_callback)
 
         wgs84_segments = polygon_builder.transform_segments_to_wgs84(
             segments,
@@ -399,7 +399,7 @@ class ProcessingPipeline:
         # Transform search polygon to WGS84 for comparison
         search_polygon = self.config['search_polygon']
 
-        polygon_builder = PolygonBuilder(None)
+        polygon_builder = PolygonBuilder(None, progress_callback=self.progress_callback)
         validation = polygon_builder.validate_coverage(
             wgs84_segments,
             search_polygon

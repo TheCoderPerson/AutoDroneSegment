@@ -14,14 +14,16 @@ logger = logging.getLogger(__name__)
 class PolygonBuilder:
     """Build segment polygons from visibility cells."""
 
-    def __init__(self, dem_processor):
+    def __init__(self, dem_processor, progress_callback=None):
         """
         Initialize polygon builder.
 
         Args:
             dem_processor: DEMProcessor instance with cell index and transform
+            progress_callback: Optional callback function(message, progress_pct)
         """
         self.dem_processor = dem_processor
+        self.progress_callback = progress_callback
 
     def build_segment_polygon(
         self,
@@ -170,8 +172,17 @@ class PolygonBuilder:
         logger.info(f"Building polygons for {len(segments)} segments...")
 
         result_segments = []
+        total_segments = len(segments)
 
-        for segment in segments:
+        for idx, segment in enumerate(segments):
+            # Report progress
+            if self.progress_callback:
+                progress_pct = 85 + int((idx / total_segments) * 4)  # Map to 85-89%
+                self.progress_callback(
+                    f"Building segment polygons... ({idx + 1}/{total_segments})",
+                    progress_pct
+                )
+
             point_id = segment['point_id']
             cell_ids = segment['covered_cells']
 
@@ -315,8 +326,17 @@ class PolygonBuilder:
         logger.info("Transforming segments to WGS84...")
 
         wgs84_segments = []
+        total_segments = len(segments)
 
-        for segment in segments:
+        for idx, segment in enumerate(segments):
+            # Report progress
+            if self.progress_callback:
+                progress_pct = 90 + int((idx / total_segments) * 4)  # Map to 90-94%
+                self.progress_callback(
+                    f"Transforming to WGS84... ({idx + 1}/{total_segments})",
+                    progress_pct
+                )
+
             # Transform polygon
             polygon_wgs84 = CRSManager.transform_geometry(
                 segment['polygon'],

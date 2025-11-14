@@ -140,6 +140,12 @@ async def calculate_segments(project_id: str, background_tasks: BackgroundTasks)
     if project['status'] == 'processing':
         raise HTTPException(status_code=400, detail="Project is already being processed")
 
+    # Initialize progress tracking BEFORE setting status to 'processing'
+    # This prevents race condition where frontend polls before progress is initialized
+    projects_db[project_id]['progress'] = 0
+    projects_db[project_id]['current_step'] = 'Starting...'
+    projects_db[project_id]['updated_at'] = datetime.now()
+
     # Update status
     projects_db[project_id]['status'] = 'processing'
 
@@ -162,10 +168,6 @@ async def process_project(project_id: str):
     """
     try:
         project = projects_db[project_id]
-
-        # Initialize progress tracking
-        projects_db[project_id]['progress'] = 0
-        projects_db[project_id]['current_step'] = 'Starting...'
 
         # Build config for pipeline
         config = {
@@ -281,6 +283,16 @@ async def cancel_project(project_id: str):
 
     project = projects_db[project_id]
 
+    # If already completed, cancelled, or failed, just return success
+    if project['status'] in ['completed', 'cancelled', 'failed']:
+        logger.info(f"Cancel requested for project {project_id} but it's already {project['status']}")
+        return {
+            'message': f'Project already {project["status"]}',
+            'project_id': project_id,
+            'status': project['status']
+        }
+
+    # If not processing, we can't cancel
     if project['status'] != 'processing':
         raise HTTPException(
             status_code=400,
@@ -298,10 +310,15 @@ async def cancel_project(project_id: str):
             'project_id': project_id
         }
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="No active pipeline found for this project"
-        )
+        # Pipeline might not be in dict yet if processing just started
+        # or might have just finished. Mark as cancelled anyway.
+        logger.warning(f"Cancel requested for project {project_id} but no active pipeline found")
+        projects_db[project_id]['status'] = 'cancelled'
+        projects_db[project_id]['current_step'] = 'Cancelled'
+        return {
+            'message': 'Cancellation marked (pipeline already completed or not started)',
+            'project_id': project_id
+        }
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
