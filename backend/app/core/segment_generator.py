@@ -180,9 +180,28 @@ class SegmentGenerator:
             best_coverage = set()
             best_score = 0
 
+            # Track progress through candidate points
+            points_checked = 0
+            total_points = len(available_points)
+            last_progress_update = 0
+
             for point_id in available_points:
                 if point_id not in visibility_sets:
                     continue
+
+                points_checked += 1
+
+                # Update progress periodically while checking candidates
+                # This is important because with thousands of points, this loop takes significant time
+                if self.progress_callback and points_checked - last_progress_update >= 100:
+                    coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100 if initial_uncovered > 0 else 0
+                    candidate_pct = (points_checked / total_points) * 100
+                    progress = 80 + int(coverage_pct * 0.04)
+                    self.progress_callback(
+                        f"Generating segments... Iteration {iteration}: {len(segments)} segments, checking candidates ({candidate_pct:.0f}%)",
+                        progress
+                    )
+                    last_progress_update = points_checked
 
                 # Calculate coverage of uncovered cells
                 visible_cells = visibility_sets[point_id]
