@@ -349,8 +349,8 @@ class ProcessingPipeline:
         cell_area = dem_processor.get_cell_area()
         preferred_cells = int(preferred_acres * 4046.86 / cell_area)
 
-        # Generate segments
-        segment_generator = SegmentGenerator()
+        # Generate segments with progress callback
+        segment_generator = SegmentGenerator(progress_callback=self.progress_callback)
         segments = segment_generator.generate_segments(
             list(range(len(grid_points))),
             visibility_sets,

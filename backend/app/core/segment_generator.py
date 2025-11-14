@@ -13,9 +13,15 @@ logger = logging.getLogger(__name__)
 class SegmentGenerator:
     """Generate optimal search segments using greedy max-coverage algorithm."""
 
-    def __init__(self):
-        """Initialize segment generator."""
+    def __init__(self, progress_callback=None):
+        """
+        Initialize segment generator.
+
+        Args:
+            progress_callback: Optional callback function(message, progress_pct)
+        """
         self.segments = []
+        self.progress_callback = progress_callback
 
     def generate_segments(
         self,
@@ -149,6 +155,16 @@ class SegmentGenerator:
 
         while uncovered_cells and available_points:
             iteration += 1
+
+            # Report progress every 5 iterations
+            if iteration % 5 == 0 and self.progress_callback:
+                coverage_pct = ((initial_uncovered - len(uncovered_cells)) / initial_uncovered) * 100
+                # Map to 80-82% range (narrow range since this is quick)
+                progress = 80 + int(coverage_pct * 0.02)
+                self.progress_callback(
+                    f"Generating segments... ({len(segments)} segments, {coverage_pct:.0f}% covered)",
+                    progress
+                )
 
             # Log progress every 10 iterations
             if iteration % 10 == 0:

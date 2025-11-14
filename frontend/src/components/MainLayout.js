@@ -80,9 +80,14 @@ function MainLayout() {
         const statusResponse = await api.getProjectStatus(projectId);
         const status = statusResponse.data;
 
+        // Debug logging
+        console.log('Status poll:', status);
+
         // Update progress display
         setProgress(status.progress || 0);
         setCurrentStep(status.current_step || '');
+
+        console.log('Updated progress state:', status.progress, status.current_step);
 
         if (status.status === 'completed') {
           // Get segments
@@ -237,7 +242,7 @@ function MainLayout() {
                     sx={{ height: 10, borderRadius: 5, mt: 1 }}
                   />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    {progress}%
+                    {progress}% (Debug: loading={loading.toString()}, progress={progress})
                   </Typography>
                 </Box>
 
