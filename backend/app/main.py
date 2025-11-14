@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 import os
 
 from app.api.routes import router as api_router
+from app.version import VERSION, BUILD_DATE, get_version_info
 
 # Configure logging
 logging.basicConfig(
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Drone Search Segment Planning Tool",
     description="Automatically divide search areas into optimal drone search segments",
-    version="1.0.0"
+    version=VERSION
 )
 
 # CORS middleware
@@ -52,6 +53,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
 
+# Version endpoint
+@app.get("/api/v1/version")
+async def get_version():
+    """Get API version information."""
+    return get_version_info()
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -59,7 +66,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "Drone Search Segment Planning Tool",
-        "version": "1.0.0"
+        "version": VERSION,
+        "build_date": BUILD_DATE
     }
 
 # Root endpoint
@@ -68,7 +76,8 @@ async def root():
     """Root endpoint with API information."""
     return {
         "message": "Drone Search Segment Planning Tool API",
-        "version": "1.0.0",
+        "version": VERSION,
+        "build_date": BUILD_DATE,
         "docs": "/docs",
         "health": "/health"
     }
@@ -77,7 +86,11 @@ async def root():
 @app.on_event("startup")
 async def startup_event():
     """Initialize application on startup."""
-    logger.info("Starting Drone Search Segment Planning Tool API")
+    logger.info("=" * 80)
+    logger.info(f"Starting Drone Search Segment Planning Tool API")
+    logger.info(f"Version: {VERSION}")
+    logger.info(f"Build Date: {BUILD_DATE}")
+    logger.info("=" * 80)
 
     # Create required directories
     directories = [

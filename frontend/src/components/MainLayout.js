@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -15,6 +15,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import MapView from './MapView';
 import ControlPanel from './ControlPanel';
 import api from '../services/api';
+import { VERSION, BUILD_DATE } from '../version';
 
 function MainLayout() {
   const [searchPolygon, setSearchPolygon] = useState(null);
@@ -24,6 +25,23 @@ function MainLayout() {
   const [currentStep, setCurrentStep] = useState('');
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
   const [currentProject, setCurrentProject] = useState(null);
+
+  // Log version on mount
+  useEffect(() => {
+    console.log('='.repeat(80));
+    console.log(`Drone Search Segment Planning Tool - Frontend`);
+    console.log(`Version: ${VERSION}`);
+    console.log(`Build Date: ${BUILD_DATE}`);
+    console.log('='.repeat(80));
+
+    // Fetch backend version
+    api.getVersion().then(response => {
+      console.log(`Backend Version: ${response.data.version}`);
+      console.log(`Backend Build Date: ${response.data.build_date}`);
+    }).catch(error => {
+      console.error('Could not fetch backend version:', error);
+    });
+  }, []);
 
   const handlePolygonCreated = (polygon) => {
     setSearchPolygon(polygon);
@@ -184,6 +202,9 @@ function MainLayout() {
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Drone Search Segment Planning Tool
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.8 }}>
+            v{VERSION}
           </Typography>
         </Toolbar>
       </AppBar>

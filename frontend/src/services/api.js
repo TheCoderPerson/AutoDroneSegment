@@ -3,6 +3,11 @@ import axios from 'axios';
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
 
 const api = {
+  // Get version information
+  getVersion: async () => {
+    return axios.get(`${API_BASE_URL}/version`);
+  },
+
   // Create a new project
   createProject: async (projectData) => {
     return axios.post(`${API_BASE_URL}/projects`, projectData);
