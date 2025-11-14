@@ -72,7 +72,7 @@ class PolygonBuilder:
         # Union all cell polygons
         unified_polygon = unary_union(cell_polygons)
 
-        # Handle MultiPolygon: merge all parts into single consolidated polygon
+        # Handle MultiPolygon: use conservative consolidation
         from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
         if isinstance(unified_polygon, ShapelyMultiPolygon):
             num_parts = len(unified_polygon.geoms)
@@ -80,62 +80,61 @@ class PolygonBuilder:
 
             logger.info(
                 f"Segment created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m². Merging into single polygon..."
+                f"total area {total_area:.2f} m². Applying conservative consolidation..."
             )
 
-            # Strategy: Buffer slightly to merge nearby parts, then negative buffer to restore size
-            # This creates a consolidated outer boundary
-            buffer_distance = cell_width * 0.5  # Half a cell width
+            # Strategy: Small buffer to merge nearby parts that are close together
+            # Use smaller buffer to avoid creating overlaps with other segments
+            buffer_distance = cell_width * 0.3  # Reduced from 0.5 to be more conservative
 
             # Positive buffer to merge nearby parts
             buffered = unified_polygon.buffer(buffer_distance)
 
-            # Negative buffer to restore approximate original size
-            consolidated = buffered.buffer(-buffer_distance)
+            # Negative buffer to restore size (slightly smaller negative to smooth edges)
+            consolidated = buffered.buffer(-buffer_distance * 0.9)
 
-            # If still a MultiPolygon after buffering, take convex hull as fallback
+            # Keep result even if it's still MultiPolygon - don't use convex hull
+            # as it creates too much overlap
             if isinstance(consolidated, ShapelyMultiPolygon):
                 logger.info(
-                    f"Buffer merge resulted in {len(consolidated.geoms)} parts. "
-                    f"Taking convex hull for outer boundary."
+                    f"After buffer merge: {len(consolidated.geoms)} parts remain. "
+                    f"Keeping MultiPolygon (no convex hull to avoid overlaps)."
                 )
-                unified_polygon = unified_polygon.convex_hull
             else:
-                unified_polygon = consolidated
+                logger.info(f"Consolidated into single polygon")
 
-            logger.info(f"Consolidated MultiPolygon into single polygon")
+            unified_polygon = consolidated
 
         # Clip to search polygon
         from shapely.geometry import shape
         search_poly = shape(search_polygon_geojson)
         clipped_polygon = unified_polygon.intersection(search_poly)
 
-        # Consolidate MultiPolygon parts after clipping as well
+        # Conservative consolidation after clipping as well
         if isinstance(clipped_polygon, ShapelyMultiPolygon):
             num_parts = len(clipped_polygon.geoms)
             total_area = clipped_polygon.area
 
             logger.info(
                 f"Clipping created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m². Merging..."
+                f"total area {total_area:.2f} m². Applying conservative consolidation..."
             )
 
-            # Use same buffer technique to merge parts after clipping
-            buffer_distance = cell_width * 0.5
+            # Use conservative buffer to merge nearby parts
+            buffer_distance = cell_width * 0.3
             buffered = clipped_polygon.buffer(buffer_distance)
-            consolidated = buffered.buffer(-buffer_distance)
+            consolidated = buffered.buffer(-buffer_distance * 0.9)
 
-            # If still MultiPolygon, take convex hull
+            # Keep result even if still MultiPolygon - avoid convex hull
             if isinstance(consolidated, ShapelyMultiPolygon):
                 logger.info(
-                    f"Buffer merge resulted in {len(consolidated.geoms)} parts. "
-                    f"Taking convex hull for outer boundary."
+                    f"After buffer merge: {len(consolidated.geoms)} parts remain. "
+                    f"Keeping as MultiPolygon."
                 )
-                clipped_polygon = clipped_polygon.convex_hull
             else:
-                clipped_polygon = consolidated
+                logger.info(f"Consolidated into single polygon")
 
-            logger.info(f"Consolidated clipped MultiPolygon into single polygon")
+            clipped_polygon = consolidated
 
         # Simplify to reduce vertex count
         if simplify_tolerance > 0:
@@ -217,7 +216,84 @@ class PolygonBuilder:
 
         logger.info(f"Successfully built {len(result_segments)} segment polygons")
 
+        # Remove overlaps between segments
+        result_segments = self._remove_overlaps(result_segments)
+
         return result_segments
+
+    def _remove_overlaps(self, segments: List[Dict]) -> List[Dict]:
+        """
+        Remove overlaps between segments by processing in sequence order.
+
+        Each segment is clipped to remove any overlap with previously processed segments.
+        This ensures non-overlapping coverage while maintaining the sequence priority.
+
+        Args:
+            segments: List of segment dictionaries with polygons
+
+        Returns:
+            List of segments with overlaps removed
+        """
+        logger.info("Removing overlaps between segments...")
+
+        from shapely.geometry import shape
+
+        processed_segments = []
+        previous_union = None
+
+        for idx, segment in enumerate(segments):
+            seg_shape = shape(segment['polygon'])
+            original_area = seg_shape.area
+
+            # If not the first segment, remove overlap with all previous segments
+            if previous_union is not None:
+                # Subtract the union of all previous segments
+                non_overlapping = seg_shape.difference(previous_union)
+
+                # Check if we lost significant area
+                new_area = non_overlapping.area
+                area_loss_pct = ((original_area - new_area) / original_area * 100) if original_area > 0 else 0
+
+                if area_loss_pct > 1.0:  # Log if more than 1% area lost
+                    logger.info(
+                        f"Segment {segment['sequence']}: removed {area_loss_pct:.1f}% overlap "
+                        f"(from {original_area:.0f} to {new_area:.0f} m²)"
+                    )
+
+                # Update segment with non-overlapping polygon
+                if not non_overlapping.is_empty:
+                    # Handle case where difference creates MultiPolygon
+                    from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+                    if isinstance(non_overlapping, ShapelyMultiPolygon):
+                        logger.info(
+                            f"Segment {segment['sequence']}: overlap removal created "
+                            f"MultiPolygon with {len(non_overlapping.geoms)} parts"
+                        )
+                        # Keep all parts to maintain coverage
+
+                    segment['polygon'] = mapping(non_overlapping)
+                    segment['area_m2'] = new_area
+                    segment['area_acres'] = new_area / 4046.86
+
+                    # Update union of processed segments
+                    previous_union = previous_union.union(non_overlapping)
+                else:
+                    logger.warning(
+                        f"Segment {segment['sequence']} became empty after overlap removal. "
+                        "This segment was entirely overlapped by previous segments."
+                    )
+                    continue  # Skip empty segments
+            else:
+                # First segment - no overlap to remove
+                previous_union = seg_shape
+
+            processed_segments.append(segment)
+
+        logger.info(
+            f"Overlap removal complete: kept {len(processed_segments)}/{len(segments)} segments"
+        )
+
+        return processed_segments
 
     def transform_segments_to_wgs84(
         self,
