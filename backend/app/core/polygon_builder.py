@@ -72,73 +72,70 @@ class PolygonBuilder:
         # Union all cell polygons
         unified_polygon = unary_union(cell_polygons)
 
-        # Handle MultiPolygon: filter out small disconnected parts (artifacts)
-        # but keep significant parts to maintain coverage
+        # Handle MultiPolygon: merge all parts into single consolidated polygon
         from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
         if isinstance(unified_polygon, ShapelyMultiPolygon):
             num_parts = len(unified_polygon.geoms)
             total_area = unified_polygon.area
 
-            logger.debug(
+            logger.info(
                 f"Segment created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m²"
+                f"total area {total_area:.2f} m². Merging into single polygon..."
             )
 
-            # Filter out very small disconnected parts (likely artifacts)
-            # Keep parts that are at least 1% of total area OR larger than 1000 m²
-            min_area_threshold = max(total_area * 0.01, 1000.0)  # 1% or 1000 m²
+            # Strategy: Buffer slightly to merge nearby parts, then negative buffer to restore size
+            # This creates a consolidated outer boundary
+            buffer_distance = cell_width * 0.5  # Half a cell width
 
-            significant_parts = [
-                geom for geom in unified_polygon.geoms
-                if geom.area >= min_area_threshold
-            ]
+            # Positive buffer to merge nearby parts
+            buffered = unified_polygon.buffer(buffer_distance)
 
-            if len(significant_parts) < num_parts:
+            # Negative buffer to restore approximate original size
+            consolidated = buffered.buffer(-buffer_distance)
+
+            # If still a MultiPolygon after buffering, take convex hull as fallback
+            if isinstance(consolidated, ShapelyMultiPolygon):
                 logger.info(
-                    f"Filtered MultiPolygon from {num_parts} to {len(significant_parts)} parts "
-                    f"by removing parts smaller than {min_area_threshold:.0f} m²"
+                    f"Buffer merge resulted in {len(consolidated.geoms)} parts. "
+                    f"Taking convex hull for outer boundary."
                 )
+                unified_polygon = unified_polygon.convex_hull
+            else:
+                unified_polygon = consolidated
 
-            # Use significant parts
-            if len(significant_parts) == 1:
-                unified_polygon = significant_parts[0]
-            elif len(significant_parts) > 1:
-                unified_polygon = ShapelyMultiPolygon(significant_parts)
-            # If no significant parts, keep original (shouldn't happen)
+            logger.info(f"Consolidated MultiPolygon into single polygon")
 
         # Clip to search polygon
         from shapely.geometry import shape
         search_poly = shape(search_polygon_geojson)
         clipped_polygon = unified_polygon.intersection(search_poly)
 
-        # Filter MultiPolygon parts after clipping as well
+        # Consolidate MultiPolygon parts after clipping as well
         if isinstance(clipped_polygon, ShapelyMultiPolygon):
             num_parts = len(clipped_polygon.geoms)
             total_area = clipped_polygon.area
 
-            logger.debug(
+            logger.info(
                 f"Clipping created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m²"
+                f"total area {total_area:.2f} m². Merging..."
             )
 
-            # Filter out small parts again after clipping
-            min_area_threshold = max(total_area * 0.01, 1000.0)
+            # Use same buffer technique to merge parts after clipping
+            buffer_distance = cell_width * 0.5
+            buffered = clipped_polygon.buffer(buffer_distance)
+            consolidated = buffered.buffer(-buffer_distance)
 
-            significant_parts = [
-                geom for geom in clipped_polygon.geoms
-                if geom.area >= min_area_threshold
-            ]
-
-            if len(significant_parts) < num_parts:
+            # If still MultiPolygon, take convex hull
+            if isinstance(consolidated, ShapelyMultiPolygon):
                 logger.info(
-                    f"Filtered clipped MultiPolygon from {num_parts} to {len(significant_parts)} parts"
+                    f"Buffer merge resulted in {len(consolidated.geoms)} parts. "
+                    f"Taking convex hull for outer boundary."
                 )
+                clipped_polygon = clipped_polygon.convex_hull
+            else:
+                clipped_polygon = consolidated
 
-            # Use significant parts
-            if len(significant_parts) == 1:
-                clipped_polygon = significant_parts[0]
-            elif len(significant_parts) > 1:
-                clipped_polygon = ShapelyMultiPolygon(significant_parts)
+            logger.info(f"Consolidated clipped MultiPolygon into single polygon")
 
         # Simplify to reduce vertex count
         if simplify_tolerance > 0:
