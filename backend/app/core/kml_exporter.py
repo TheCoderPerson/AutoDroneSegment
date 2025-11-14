@@ -99,27 +99,35 @@ class KMLExporter:
             seq = segment['sequence']
             polygon_geom = segment['polygon']
 
-            # Extract all polygon coordinates (handles both Polygon and MultiPolygon)
-            all_coords = self._extract_all_coordinates(polygon_geom)
-
-            # Description (shared for all parts)
+            # Description
             desc = self._build_segment_description(segment)
 
             # Style - cycle through colors
             color = colors[(seq - 1) % len(colors)]
 
-            # Create a KML polygon for each part
-            for part_idx, coords in enumerate(all_coords):
-                if coords:
-                    part_name = f"Segment {seq}" if len(all_coords) == 1 else f"Segment {seq} Part {part_idx + 1}"
-                    poly = folder.newpolygon(name=part_name)
-                    poly.outerboundaryis = coords
-                    poly.description = desc
+            # Extract all polygon coordinates (handles both Polygon and MultiPolygon)
+            all_coords = self._extract_all_coordinates(polygon_geom)
 
-                    # Same style for all parts of the same segment
-                    poly.style.linestyle.color = simplekml.Color.black
-                    poly.style.linestyle.width = 2
-                    poly.style.polystyle.color = simplekml.Color.changealphaint(100, color)
+            if len(all_coords) == 1:
+                # Single polygon - create simple polygon
+                poly = folder.newpolygon(name=f"Segment {seq}")
+                poly.outerboundaryis = all_coords[0]
+                poly.description = desc
+                poly.style.linestyle.color = simplekml.Color.black
+                poly.style.linestyle.width = 2
+                poly.style.polystyle.color = simplekml.Color.changealphaint(100, color)
+            else:
+                # MultiPolygon - create a single placemark with MultiGeometry
+                multi = folder.newmultigeometry(name=f"Segment {seq}")
+                multi.description = desc
+
+                for coords in all_coords:
+                    if coords:
+                        poly = multi.newpolygon()
+                        poly.outerboundaryis = coords
+                        poly.style.linestyle.color = simplekml.Color.black
+                        poly.style.linestyle.width = 2
+                        poly.style.polystyle.color = simplekml.Color.changealphaint(100, color)
 
     def _add_launch_points(self, segments: List[Dict]):
         """Add launch points to KML."""

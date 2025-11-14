@@ -189,6 +189,7 @@ async def process_project(project_id: str):
             projects_db[project_id]['current_step'] = step
             projects_db[project_id]['progress'] = progress
             projects_db[project_id]['updated_at'] = datetime.now()
+            logger.info(f"Project {project_id} progress: {progress}% - {step}")
 
         # Execute pipeline
         pipeline = ProcessingPipeline(config, progress_callback=update_progress)
@@ -250,7 +251,7 @@ async def get_project_status(project_id: str):
 
     project = projects_db[project_id]
 
-    return {
+    status_response = {
         'project_id': project_id,
         'status': project['status'],
         'progress': project.get('progress', 0),
@@ -258,6 +259,10 @@ async def get_project_status(project_id: str):
         'segment_count': project.get('segment_count', 0),
         'error_message': project.get('error_message')
     }
+
+    logger.debug(f"Status request for {project_id}: {project['status']}, progress={status_response['progress']}%")
+
+    return status_response
 
 
 @router.post("/projects/{project_id}/cancel")

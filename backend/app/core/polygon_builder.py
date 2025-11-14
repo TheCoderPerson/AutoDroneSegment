@@ -72,31 +72,73 @@ class PolygonBuilder:
         # Union all cell polygons
         unified_polygon = unary_union(cell_polygons)
 
-        # Log if we got a MultiPolygon, but DON'T filter parts
-        # Keep all parts to maintain coverage
+        # Handle MultiPolygon: filter out small disconnected parts (artifacts)
+        # but keep significant parts to maintain coverage
         from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
         if isinstance(unified_polygon, ShapelyMultiPolygon):
             num_parts = len(unified_polygon.geoms)
             total_area = unified_polygon.area
+
             logger.debug(
                 f"Segment created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m². Keeping all parts."
+                f"total area {total_area:.2f} m²"
             )
-            # Don't filter - keep the full MultiPolygon to maintain coverage
+
+            # Filter out very small disconnected parts (likely artifacts)
+            # Keep parts that are at least 1% of total area OR larger than 1000 m²
+            min_area_threshold = max(total_area * 0.01, 1000.0)  # 1% or 1000 m²
+
+            significant_parts = [
+                geom for geom in unified_polygon.geoms
+                if geom.area >= min_area_threshold
+            ]
+
+            if len(significant_parts) < num_parts:
+                logger.info(
+                    f"Filtered MultiPolygon from {num_parts} to {len(significant_parts)} parts "
+                    f"by removing parts smaller than {min_area_threshold:.0f} m²"
+                )
+
+            # Use significant parts
+            if len(significant_parts) == 1:
+                unified_polygon = significant_parts[0]
+            elif len(significant_parts) > 1:
+                unified_polygon = ShapelyMultiPolygon(significant_parts)
+            # If no significant parts, keep original (shouldn't happen)
 
         # Clip to search polygon
         from shapely.geometry import shape
         search_poly = shape(search_polygon_geojson)
         clipped_polygon = unified_polygon.intersection(search_poly)
 
-        # Keep MultiPolygon as-is after clipping
+        # Filter MultiPolygon parts after clipping as well
         if isinstance(clipped_polygon, ShapelyMultiPolygon):
             num_parts = len(clipped_polygon.geoms)
             total_area = clipped_polygon.area
+
             logger.debug(
                 f"Clipping created MultiPolygon with {num_parts} parts, "
-                f"total area {total_area:.2f} m². Keeping all parts."
+                f"total area {total_area:.2f} m²"
             )
+
+            # Filter out small parts again after clipping
+            min_area_threshold = max(total_area * 0.01, 1000.0)
+
+            significant_parts = [
+                geom for geom in clipped_polygon.geoms
+                if geom.area >= min_area_threshold
+            ]
+
+            if len(significant_parts) < num_parts:
+                logger.info(
+                    f"Filtered clipped MultiPolygon from {num_parts} to {len(significant_parts)} parts"
+                )
+
+            # Use significant parts
+            if len(significant_parts) == 1:
+                clipped_polygon = significant_parts[0]
+            elif len(significant_parts) > 1:
+                clipped_polygon = ShapelyMultiPolygon(significant_parts)
 
         # Simplify to reduce vertex count
         if simplify_tolerance > 0:
