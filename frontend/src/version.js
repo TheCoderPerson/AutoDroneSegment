@@ -2,7 +2,7 @@
  * Version information for the frontend.
  */
 
-export const VERSION = '1.0.5';
+export const VERSION = '1.0.6';
 export const BUILD_DATE = '2025-11-15';
 
 export const getVersionInfo = () => {

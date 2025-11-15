@@ -5,7 +5,6 @@ import os
 import uuid
 import json
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -24,9 +23,6 @@ router = APIRouter()
 projects_db = {}
 segments_db = {}
 pipeline_instances = {}  # Store pipeline instances for cancellation
-
-# Thread pool for running async tasks in background
-executor = ThreadPoolExecutor(max_workers=4)
 
 
 @router.post("/projects", response_model=ProjectResponse)
@@ -153,9 +149,9 @@ async def calculate_segments(project_id: str):
     # Update status
     projects_db[project_id]['status'] = 'processing'
 
-    # Start processing in background using thread pool
-    # This ensures asyncio.run() has its own event loop context
-    executor.submit(process_project, project_id)
+    # Start processing in background using asyncio task
+    # This runs in the existing FastAPI event loop without blocking
+    asyncio.create_task(process_project(project_id))
 
     return {
         "message": "Processing started",
@@ -164,91 +160,85 @@ async def calculate_segments(project_id: str):
     }
 
 
-def process_project(project_id: str):
+async def process_project(project_id: str):
     """
     Background task to process a project.
 
-    This is a synchronous function that creates its own event loop to run
-    the async pipeline. This ensures the HTTP response returns immediately
-    while processing continues in the background.
+    This async function runs in the existing FastAPI event loop as a background task.
+    The HTTP response returns immediately while processing continues in the background.
 
     Args:
         project_id: Project UUID
     """
-    async def _process():
-        """Inner async function that does the actual processing."""
-        try:
-            project = projects_db[project_id]
+    try:
+        project = projects_db[project_id]
 
-            # Build config for pipeline
-            config = {
-                'project_id': project_id,
-                'search_polygon': project['search_polygon'],
-                'drone_agl_altitude': project['drone_agl_altitude'],
-                'preferred_segment_size_acres': project['preferred_segment_size_acres'],
-                'max_vlos_m': project['max_vlos_m'],
-                'access_types': project['access_types'],
-                'access_deviation_m': project['access_deviation_m'],
-                'grid_spacing_m': project['grid_spacing_m'],
-                'dem_path': project.get('dem_path'),
-                'vegetation_path': project.get('vegetation_path'),
-                'roads_path': project.get('roads_path'),
-                'trails_path': project.get('trails_path'),
-                'output_dir': f"/app/data/projects/{project_id}/output"
-            }
+        # Build config for pipeline
+        config = {
+            'project_id': project_id,
+            'search_polygon': project['search_polygon'],
+            'drone_agl_altitude': project['drone_agl_altitude'],
+            'preferred_segment_size_acres': project['preferred_segment_size_acres'],
+            'max_vlos_m': project['max_vlos_m'],
+            'access_types': project['access_types'],
+            'access_deviation_m': project['access_deviation_m'],
+            'grid_spacing_m': project['grid_spacing_m'],
+            'dem_path': project.get('dem_path'),
+            'vegetation_path': project.get('vegetation_path'),
+            'roads_path': project.get('roads_path'),
+            'trails_path': project.get('trails_path'),
+            'output_dir': f"/app/data/projects/{project_id}/output"
+        }
 
-            # Create progress callback
-            def update_progress(step: str, progress: int):
-                projects_db[project_id]['current_step'] = step
-                projects_db[project_id]['progress'] = progress
-                projects_db[project_id]['updated_at'] = datetime.now()
-                logger.info(f"Project {project_id} progress: {progress}% - {step}")
+        # Create progress callback
+        def update_progress(step: str, progress: int):
+            projects_db[project_id]['current_step'] = step
+            projects_db[project_id]['progress'] = progress
+            projects_db[project_id]['updated_at'] = datetime.now()
+            logger.info(f"Project {project_id} progress: {progress}% - {step}")
 
-            # Execute pipeline
-            pipeline = ProcessingPipeline(config, progress_callback=update_progress)
+        # Execute pipeline
+        pipeline = ProcessingPipeline(config, progress_callback=update_progress)
 
-            # Store pipeline instance for cancellation
-            pipeline_instances[project_id] = pipeline
+        # Store pipeline instance for cancellation
+        pipeline_instances[project_id] = pipeline
 
-            results = await pipeline.execute()
+        results = await pipeline.execute()
 
-            # Remove pipeline instance after completion
-            if project_id in pipeline_instances:
-                del pipeline_instances[project_id]
+        # Remove pipeline instance after completion
+        if project_id in pipeline_instances:
+            del pipeline_instances[project_id]
 
-            if results['success']:
-                # Store segments
-                segments_db[project_id] = results['segments']
+        if results['success']:
+            # Store segments
+            segments_db[project_id] = results['segments']
 
-                # Update project
-                projects_db[project_id]['status'] = 'completed'
-                projects_db[project_id]['segment_count'] = len(results['segments'])
-                projects_db[project_id]['progress'] = 100
-                projects_db[project_id]['current_step'] = 'Complete'
+            # Update project
+            projects_db[project_id]['status'] = 'completed'
+            projects_db[project_id]['segment_count'] = len(results['segments'])
+            projects_db[project_id]['progress'] = 100
+            projects_db[project_id]['current_step'] = 'Complete'
 
-                logger.info(f"Project {project_id} processing completed")
+            logger.info(f"Project {project_id} processing completed")
 
+        else:
+            # Check if it was cancelled
+            error_msg = results.get('error', '')
+            if 'Cancelled' in error_msg:
+                projects_db[project_id]['status'] = 'cancelled'
             else:
-                # Check if it was cancelled
-                error_msg = results.get('error', '')
-                if 'Cancelled' in error_msg:
-                    projects_db[project_id]['status'] = 'cancelled'
-                else:
-                    projects_db[project_id]['status'] = 'failed'
-                projects_db[project_id]['error_message'] = error_msg
-                logger.error(f"Project {project_id} processing failed: {error_msg}")
+                projects_db[project_id]['status'] = 'failed'
+            projects_db[project_id]['error_message'] = error_msg
+            logger.error(f"Project {project_id} processing failed: {error_msg}")
 
-        except Exception as e:
-            # Remove pipeline instance on error
-            if project_id in pipeline_instances:
-                del pipeline_instances[project_id]
+    except Exception as e:
+        # Remove pipeline instance on error
+        if project_id in pipeline_instances:
+            del pipeline_instances[project_id]
 
-            projects_db[project_id]['status'] = 'failed'
-            projects_db[project_id]['error_message'] = str(e)
-            logger.error(f"Error processing project {project_id}: {e}", exc_info=True)
-
-    # Run the async function in a new event loop
-    asyncio.run(_process())
+        projects_db[project_id]['status'] = 'failed'
+        projects_db[project_id]['error_message'] = str(e)
+        logger.error(f"Error processing project {project_id}: {e}", exc_info=True)
 
 
 @router.get("/projects/{project_id}/status")
