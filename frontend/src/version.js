@@ -2,8 +2,8 @@
  * Version information for the frontend.
  */
 
-export const VERSION = '1.0.12';
-export const BUILD_DATE = '2025-11-14';
+export const VERSION = '1.0.13';
+export const BUILD_DATE = '2025-11-15';
 
 export const getVersionInfo = () => {
   return {
