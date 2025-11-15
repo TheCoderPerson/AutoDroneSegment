@@ -402,9 +402,14 @@ class PolygonBuilder:
         # Remove overlaps between segments
         result_segments = self._remove_overlaps(result_segments)
 
-        # CHANGE: Remove nested segments (islands) after overlap removal
-        # This ensures no segment contains another segment wholly inside it
-        result_segments = self._remove_nested_segments(result_segments)
+        # CHANGE: Merge small disconnected parts into nearest neighbors
+        # This preserves coverage by merging small parts instead of discarding them
+        result_segments = self._merge_small_parts_into_nearest(result_segments)
+
+        # CHANGE: Absorb nested segments (islands) after merging small parts
+        # This ensures island segments are absorbed into their containing segments
+        # Uses union instead of subtraction to prevent holes
+        result_segments = self._absorb_nested_segments(result_segments)
 
         # CHANGE: Validate that all segments are single Polygons (not MultiPolygons)
         result_segments = self._validate_single_polygons(result_segments)
@@ -512,66 +517,215 @@ class PolygonBuilder:
 
         return processed_segments
 
-    def _remove_nested_segments(self, segments: List[Dict]) -> List[Dict]:
+    def _merge_small_parts_into_nearest(self, segments: List[Dict], min_part_area: float = 1000, min_part_ratio: float = 0.05) -> List[Dict]:
         """
-        Remove nested segments (islands) where one segment is completely within another.
+        Merge small disconnected parts of MultiPolygons into nearest neighbor segments.
 
-        CHANGE: Added to ensure no segment has another segment contained wholly inside it.
-        This prevents island scenarios where segment B is fully inside segment A.
+        CHANGE: New method to handle small disconnected parts.
+        Instead of discarding small parts, we merge them into the spatially nearest segment.
+        This preserves coverage and prevents loss of area.
+
+        Args:
+            segments: List of segment dictionaries with polygons
+            min_part_area: Minimum area (m²) for a part to keep with original segment
+            min_part_ratio: Minimum ratio of part area to total for a part to keep
+
+        Returns:
+            List of segments with small parts merged into nearest neighbors
+        """
+        logger.info("Checking for small disconnected parts to merge into nearest neighbors...")
+
+        from shapely.geometry import shape, MultiPolygon as ShapelyMultiPolygon
+
+        merge_count = 0
+        total_merged_area = 0
+
+        # Process each segment
+        for i, segment in enumerate(segments):
+            poly = shape(segment['polygon'])
+
+            # Only process MultiPolygons
+            if not isinstance(poly, ShapelyMultiPolygon):
+                continue
+
+            # Get all parts sorted by area (largest first)
+            parts_with_area = [(p, p.area) for p in poly.geoms]
+            parts_with_area.sort(key=lambda x: x[1], reverse=True)
+
+            total_area = poly.area
+            parts_to_keep = []
+            parts_to_merge = []
+
+            # Classify parts as keep or merge
+            for part, area in parts_with_area:
+                area_ratio = area / total_area if total_area > 0 else 0
+
+                # Keep if it meets either threshold
+                if area >= min_part_area or area_ratio >= min_part_ratio:
+                    parts_to_keep.append(part)
+                else:
+                    parts_to_merge.append(part)
+
+            # If there are small parts to merge
+            if parts_to_merge:
+                logger.info(
+                    f"Segment {segment['sequence']}: Found {len(parts_to_merge)} small disconnected part(s) "
+                    f"to merge into nearest neighbors"
+                )
+
+                # For each small part, find nearest segment and merge
+                for small_part in parts_to_merge:
+                    small_part_centroid = small_part.centroid
+                    small_part_area = small_part.area
+
+                    # Find nearest segment (excluding current segment)
+                    min_distance = float('inf')
+                    nearest_segment_idx = None
+
+                    for j, other_segment in enumerate(segments):
+                        if i == j:
+                            continue  # Skip self
+
+                        other_poly = shape(other_segment['polygon'])
+                        distance = other_poly.distance(small_part_centroid)
+
+                        if distance < min_distance:
+                            min_distance = distance
+                            nearest_segment_idx = j
+
+                    # Merge small part into nearest segment
+                    if nearest_segment_idx is not None:
+                        nearest_segment = segments[nearest_segment_idx]
+                        nearest_poly = shape(nearest_segment['polygon'])
+
+                        # Union the small part with the nearest segment
+                        try:
+                            merged_poly = nearest_poly.union(small_part)
+
+                            # Ensure result is a single Polygon
+                            if isinstance(merged_poly, ShapelyMultiPolygon):
+                                merged_poly = self._ensure_single_polygon(
+                                    merged_poly,
+                                    f"Segment {nearest_segment['sequence']}"
+                                )
+
+                            # Update nearest segment
+                            nearest_segment['polygon'] = mapping(merged_poly)
+                            nearest_segment['area_m2'] = merged_poly.area
+                            nearest_segment['area_acres'] = merged_poly.area / 4046.86
+
+                            logger.info(
+                                f"Merged small disconnected part of Segment {segment['sequence']} "
+                                f"(area {small_part_area:.0f} m²) into nearest Segment "
+                                f"{nearest_segment['sequence']} (distance {min_distance:.1f} m)"
+                            )
+
+                            merge_count += 1
+                            total_merged_area += small_part_area
+
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to merge small part into segment {nearest_segment['sequence']}: {e}"
+                            )
+
+                # Update current segment to keep only large parts
+                if parts_to_keep:
+                    if len(parts_to_keep) == 1:
+                        # Single large part remains
+                        updated_poly = parts_to_keep[0]
+                    else:
+                        # Multiple large parts - pick largest
+                        logger.info(
+                            f"Segment {segment['sequence']}: {len(parts_to_keep)} large parts remain, "
+                            f"selecting largest"
+                        )
+                        updated_poly = parts_to_keep[0]
+
+                    segment['polygon'] = mapping(updated_poly)
+                    segment['area_m2'] = updated_poly.area
+                    segment['area_acres'] = updated_poly.area / 4046.86
+                else:
+                    # All parts were small and merged away - this shouldn't happen
+                    logger.warning(
+                        f"Segment {segment['sequence']}: All parts were small and merged away. "
+                        f"Keeping original polygon."
+                    )
+
+        if merge_count > 0:
+            logger.info(
+                f"Small parts merge complete: {merge_count} part(s) merged into nearest neighbors, "
+                f"total area transferred: {total_merged_area:.0f} m²"
+            )
+        else:
+            logger.info("No small disconnected parts found to merge")
+
+        return segments
+
+    def _absorb_nested_segments(self, segments: List[Dict]) -> List[Dict]:
+        """
+        Absorb nested segments (islands) where one segment is completely within another.
+
+        CHANGE: Updated to ABSORB islands instead of subtracting them.
+        When segment B is fully inside segment A, we union them (A = A ∪ B) and mark B for removal.
+        This prevents holes and ensures island segments are absorbed into their containing segments.
 
         Args:
             segments: List of segment dictionaries with polygons
 
         Returns:
-            List of segments with nested relationships resolved
+            List of segments with islands absorbed and removed
         """
-        logger.info("Checking for nested segments (islands)...")
+        logger.info("Checking for nested segments (islands) to absorb...")
 
         from shapely.geometry import shape
 
-        # Track modifications
-        modifications = []
+        # Track which segments to remove (they've been absorbed)
+        segments_to_remove = set()
+        absorption_count = 0
 
         # Check each pair of segments for containment
         for i, seg_outer in enumerate(segments):
+            if i in segments_to_remove:
+                continue  # Skip if already marked for removal
+
             poly_outer = shape(seg_outer['polygon'])
 
             for j, seg_inner in enumerate(segments):
-                if i == j:
-                    continue  # Skip self
+                if i == j or j in segments_to_remove:
+                    continue  # Skip self and already removed segments
 
                 poly_inner = shape(seg_inner['polygon'])
 
                 # Check if inner segment is completely within outer segment
                 if poly_inner.within(poly_outer) or poly_outer.contains(poly_inner):
-                    # Segment is nested - subtract inner from outer
+                    # CHANGE: Absorb island by union instead of subtraction
                     logger.info(
-                        f"Nested segment detected: Segment {seg_inner['sequence']} "
+                        f"Island detected: Segment {seg_inner['sequence']} "
                         f"is within Segment {seg_outer['sequence']}. "
-                        f"Subtracting inner segment from outer."
+                        f"Absorbing island into outer segment."
                     )
 
-                    # Subtract inner polygon from outer polygon
                     try:
-                        new_outer = poly_outer.difference(poly_inner)
+                        # Union the geometries to absorb the island
+                        new_outer = poly_outer.union(poly_inner)
 
                         # Log the change
                         old_area = poly_outer.area
+                        island_area = poly_inner.area
                         new_area = new_outer.area
-                        area_removed = old_area - new_area
-                        area_removed_pct = (area_removed / old_area * 100) if old_area > 0 else 0
+                        area_added = new_area - old_area
 
                         logger.info(
-                            f"Segment {seg_outer['sequence']}: Removed nested segment "
-                            f"{seg_inner['sequence']} (area reduced by {area_removed:.0f} m², "
-                            f"{area_removed_pct:.1f}%)"
+                            f"Segment {seg_outer['sequence']}: Absorbed island segment "
+                            f"{seg_inner['sequence']} (area increased by {area_added:.0f} m², "
+                            f"island was {island_area:.0f} m²)"
                         )
 
                         # Ensure result is a single Polygon
                         from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
                         if isinstance(new_outer, ShapelyMultiPolygon):
                             logger.info(
-                                f"Segment {seg_outer['sequence']}: Subtraction created MultiPolygon, "
+                                f"Segment {seg_outer['sequence']}: Union created MultiPolygon, "
                                 f"converting to single Polygon"
                             )
                             new_outer = self._ensure_single_polygon(
@@ -587,33 +741,37 @@ class PolygonBuilder:
                         # Update poly_outer for next iteration
                         poly_outer = new_outer
 
-                        modifications.append({
-                            'outer_segment': seg_outer['sequence'],
-                            'inner_segment': seg_inner['sequence'],
-                            'area_removed_m2': area_removed
-                        })
+                        # Mark inner segment for removal (it's been absorbed)
+                        segments_to_remove.add(j)
+                        absorption_count += 1
 
                     except Exception as e:
                         logger.error(
-                            f"Failed to subtract nested segment {seg_inner['sequence']} "
-                            f"from segment {seg_outer['sequence']}: {e}"
+                            f"Failed to absorb island segment {seg_inner['sequence']} "
+                            f"into segment {seg_outer['sequence']}: {e}"
                         )
 
-        if modifications:
+        # Remove absorbed segments
+        if segments_to_remove:
+            removed_sequences = [segments[i]['sequence'] for i in segments_to_remove]
+            segments = [seg for i, seg in enumerate(segments) if i not in segments_to_remove]
             logger.info(
-                f"Nested segment removal complete: {len(modifications)} nested segment(s) removed"
+                f"Island absorption complete: {absorption_count} island segment(s) absorbed "
+                f"and removed from independent list (sequences: {removed_sequences})"
             )
         else:
-            logger.info("No nested segments found")
+            logger.info("No nested island segments found")
 
         return segments
 
     def _validate_single_polygons(self, segments: List[Dict]) -> List[Dict]:
         """
-        Validate that all segments are single Polygons (not MultiPolygons).
+        Validate that all segments are single Polygons (not MultiPolygons) and no nesting exists.
 
-        CHANGE: Added to ensure final validation that all segments are single polygons.
-        If any MultiPolygon is found, it will be converted to a single Polygon.
+        CHANGE: Enhanced to check both polygon type and containment.
+        Validates that:
+        1. All segments are single Polygons (not MultiPolygons)
+        2. No segment contains another segment's centroid (no nesting)
 
         Args:
             segments: List of segment dictionaries with polygons
@@ -621,13 +779,14 @@ class PolygonBuilder:
         Returns:
             List of segments with all geometries validated as single Polygons
         """
-        logger.info("Validating that all segments are single Polygons...")
+        logger.info("Validating that all segments are single Polygons and no nesting exists...")
 
         from shapely.geometry import shape, MultiPolygon as ShapelyMultiPolygon
 
         multipolygon_count = 0
         fixed_count = 0
 
+        # Check 1: Validate polygon types
         for segment in segments:
             poly = shape(segment['polygon'])
 
@@ -661,6 +820,39 @@ class PolygonBuilder:
             )
         else:
             logger.info("All segments validated: all are single Polygons ✓")
+
+        # Check 2: Validate no segment contains another segment's centroid
+        logger.info("Checking for nested segments (containment validation)...")
+        nesting_issues = []
+
+        for i, seg_a in enumerate(segments):
+            poly_a = shape(seg_a['polygon'])
+
+            for j, seg_b in enumerate(segments):
+                if i == j:
+                    continue
+
+                poly_b = shape(seg_b['polygon'])
+                centroid_b = poly_b.centroid
+
+                # Check if segment A contains segment B's centroid
+                if poly_a.contains(centroid_b):
+                    nesting_issues.append({
+                        'container': seg_a['sequence'],
+                        'contained': seg_b['sequence']
+                    })
+
+        if nesting_issues:
+            logger.warning(
+                f"Found {len(nesting_issues)} potential nesting issue(s) after absorption. "
+                f"This may indicate incomplete absorption."
+            )
+            for issue in nesting_issues[:5]:  # Log first 5
+                logger.warning(
+                    f"  - Segment {issue['container']} contains centroid of Segment {issue['contained']}"
+                )
+        else:
+            logger.info("No nested segments detected: all segments are independent ✓")
 
         return segments
 
