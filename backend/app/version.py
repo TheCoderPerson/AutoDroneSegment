@@ -1,7 +1,7 @@
 """Version information for the backend."""
 
-VERSION = "1.0.7"
-BUILD_DATE = "2025-11-15"
+VERSION = "1.0.12"
+BUILD_DATE = "2025-11-14"
 
 def get_version_info():
     """Get version information as a dictionary."""

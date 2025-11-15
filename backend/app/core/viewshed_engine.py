@@ -338,7 +338,8 @@ class ViewshedEngine:
     def filter_visible_cells_by_polygon(
         self,
         visible_cells: Set[int],
-        polygon_geojson: dict
+        polygon_geojson: dict,
+        prepared_polygon=None
     ) -> Set[int]:
         """
         Filter visible cells to only those inside the search polygon.
@@ -346,18 +347,26 @@ class ViewshedEngine:
         Args:
             visible_cells: Set of cell IDs
             polygon_geojson: Search polygon geometry
+            prepared_polygon: Optional pre-prepared polygon for faster contains checks
 
         Returns:
             Filtered set of cell IDs
         """
-        geom = shape(polygon_geojson)
+        from shapely.prepared import prep
+
+        # Use prepared polygon if provided, otherwise create and prepare it
+        if prepared_polygon is None:
+            geom = shape(polygon_geojson)
+            prepared_polygon = prep(geom)
+
         filtered_cells = set()
 
+        # Batch process for better performance
         for cell_id in visible_cells:
             if cell_id in self.dem_processor.cell_index:
                 x, y = self.dem_processor.cell_index[cell_id]
                 point = Point(x, y)
-                if geom.contains(point):
+                if prepared_polygon.contains(point):
                     filtered_cells.add(cell_id)
 
         return filtered_cells

@@ -25,6 +25,109 @@ class PolygonBuilder:
         self.dem_processor = dem_processor
         self.progress_callback = progress_callback
 
+    def remove_holes(self, polygon, min_hole_area=100):
+        """
+        Remove interior holes (rings) from a polygon to create solid segments.
+
+        Small holes can be artifacts from overlap removal or cell-based construction.
+        This ensures segments are solid polygons without interior holes.
+
+        Args:
+            polygon: Shapely Polygon or MultiPolygon
+            min_hole_area: Minimum hole area in m² to keep (smaller holes are filled)
+
+        Returns:
+            Polygon or MultiPolygon without small holes
+        """
+        from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon as ShapelyMultiPolygon
+
+        if isinstance(polygon, ShapelyPolygon):
+            if polygon.interiors:
+                # Keep only large holes (if any)
+                exteriors = [polygon.exterior]
+                large_holes = [interior for interior in polygon.interiors
+                              if ShapelyPolygon(interior).area >= min_hole_area]
+
+                if large_holes:
+                    return ShapelyPolygon(exteriors[0], holes=large_holes)
+                else:
+                    # No holes to keep - return solid polygon
+                    return ShapelyPolygon(exteriors[0])
+            return polygon
+
+        elif isinstance(polygon, ShapelyMultiPolygon):
+            # Remove holes from each polygon in the multipolygon
+            cleaned_polys = [self.remove_holes(p, min_hole_area) for p in polygon.geoms]
+            return ShapelyMultiPolygon(cleaned_polys)
+
+        return polygon
+
+    def consolidate_multipolygon(self, polygon, min_part_area=1000, min_part_ratio=0.05):
+        """
+        Consolidate MultiPolygons by removing small disconnected parts.
+
+        This fixes the issue where overlap removal creates tiny disconnected pieces
+        of one segment inside or near other segments. Small parts are removed to
+        ensure each segment is a single contiguous polygon.
+
+        Args:
+            polygon: Shapely Polygon or MultiPolygon
+            min_part_area: Minimum area (m²) for a part to be kept (default 1000m² ≈ 0.25 acres)
+            min_part_ratio: Minimum ratio of part area to total area (default 5%)
+
+        Returns:
+            Polygon or consolidated MultiPolygon with only significant parts
+        """
+        from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon as ShapelyMultiPolygon
+
+        if isinstance(polygon, ShapelyPolygon):
+            # Already a single polygon, nothing to consolidate
+            return polygon
+
+        elif isinstance(polygon, ShapelyMultiPolygon):
+            if len(polygon.geoms) == 1:
+                # Only one part, return it as a Polygon
+                return polygon.geoms[0]
+
+            # Calculate total area
+            total_area = polygon.area
+
+            # Sort parts by area (largest first)
+            parts_with_area = [(p, p.area) for p in polygon.geoms]
+            parts_with_area.sort(key=lambda x: x[1], reverse=True)
+
+            # Keep parts that meet minimum criteria
+            kept_parts = []
+            removed_count = 0
+            removed_area = 0
+
+            for part, area in parts_with_area:
+                area_ratio = area / total_area if total_area > 0 else 0
+
+                # Keep if it meets either threshold
+                if area >= min_part_area or area_ratio >= min_part_ratio:
+                    kept_parts.append(part)
+                else:
+                    removed_count += 1
+                    removed_area += area
+
+            if removed_count > 0:
+                logger.info(
+                    f"Consolidated MultiPolygon: removed {removed_count} small part(s) "
+                    f"totaling {removed_area:.0f} m² ({removed_area/total_area*100:.1f}% of segment)"
+                )
+
+            # Return appropriate geometry
+            if len(kept_parts) == 0:
+                logger.warning("All parts removed during consolidation, keeping original")
+                return polygon
+            elif len(kept_parts) == 1:
+                return kept_parts[0]  # Single polygon
+            else:
+                return ShapelyMultiPolygon(kept_parts)
+
+        return polygon
+
     def build_segment_polygon(
         self,
         cell_ids: Set[int],
@@ -144,6 +247,14 @@ class PolygonBuilder:
                 simplify_tolerance,
                 preserve_topology=True
             )
+
+        # Fix invalid geometry if needed
+        if not clipped_polygon.is_valid:
+            logger.warning("Segment polygon has invalid geometry after clipping/simplification, fixing...")
+            clipped_polygon = clipped_polygon.buffer(0)
+
+        # Remove small holes to ensure solid segments
+        clipped_polygon = self.remove_holes(clipped_polygon, min_hole_area=100)
 
         # Convert to GeoJSON
         return mapping(clipped_polygon)
@@ -282,6 +393,25 @@ class PolygonBuilder:
                         )
                         # Keep all parts to maintain coverage
 
+                    # Fix invalid geometry if needed
+                    if not non_overlapping.is_valid:
+                        logger.warning(f"Segment {segment['sequence']} has invalid geometry after overlap removal, fixing...")
+                        non_overlapping = non_overlapping.buffer(0)
+
+                    # Remove holes created by overlap removal
+                    non_overlapping = self.remove_holes(non_overlapping, min_hole_area=100)
+
+                    # Consolidate MultiPolygons by removing small disconnected parts
+                    # This prevents tiny islands of one segment appearing inside others
+                    non_overlapping = self.consolidate_multipolygon(
+                        non_overlapping,
+                        min_part_area=1000,  # 1000 m² ≈ 0.25 acres
+                        min_part_ratio=0.05   # 5% of segment area
+                    )
+
+                    # Recalculate area after consolidation
+                    new_area = non_overlapping.area
+
                     segment['polygon'] = mapping(non_overlapping)
                     segment['area_m2'] = new_area
                     segment['area_acres'] = new_area / 4046.86
@@ -391,9 +521,28 @@ class PolygonBuilder:
         search_poly = shape(search_polygon_geojson)
         search_area = search_poly.area
 
-        # Union all segment polygons
-        segment_polys = [shape(seg['polygon']) for seg in segments]
-        covered_area = unary_union(segment_polys)
+        # Union all segment polygons - fix invalid geometries first
+        segment_polys = []
+        for seg in segments:
+            poly = shape(seg['polygon'])
+            # Fix invalid geometries using buffer(0)
+            if not poly.is_valid:
+                logger.warning(f"Segment {seg.get('sequence')} has invalid geometry, fixing...")
+                poly = poly.buffer(0)
+            segment_polys.append(poly)
+
+        try:
+            covered_area = unary_union(segment_polys)
+        except Exception as e:
+            logger.error(f"Failed to union segments for validation: {e}")
+            # If union fails, skip detailed validation and return basic stats
+            return {
+                'coverage_percentage': 0.0,
+                'gap_percentage': 0.0,
+                'overlap_count': 0,
+                'validation_skipped': True,
+                'error': str(e)
+            }
 
         # Calculate coverage
         intersection = search_poly.intersection(covered_area)

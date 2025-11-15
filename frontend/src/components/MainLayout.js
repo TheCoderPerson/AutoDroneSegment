@@ -90,7 +90,7 @@ function MainLayout() {
   };
 
   const pollForResults = async (projectId) => {
-    const maxAttempts = 150; // 5 minutes with 2-second intervals
+    const maxAttempts = 1800; // 60 minutes with 2-second intervals
     let attempts = 0;
 
     const poll = async () => {

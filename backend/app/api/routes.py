@@ -226,8 +226,17 @@ def process_project(project_id: str):
                 del pipeline_instances[project_id]
 
             if results['success']:
-                # Store segments
+                # Store segments in memory and persist to disk
                 segments_db[project_id] = results['segments']
+
+                # Save segments to disk for persistence
+                segments_file = f"/app/data/projects/{project_id}/segments.json"
+                try:
+                    with open(segments_file, 'w') as f:
+                        json.dump(results['segments'], f, indent=2)
+                    logger.info(f"Saved segments to {segments_file}")
+                except Exception as e:
+                    logger.error(f"Failed to save segments to disk: {e}")
 
                 # Update project
                 projects_db[project_id]['status'] = 'completed'
@@ -377,8 +386,20 @@ async def get_segments(project_id: str):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Try to get from memory first
     if project_id not in segments_db:
-        raise HTTPException(status_code=404, detail="Segments not yet generated")
+        # Try to load from disk
+        segments_file = f"/app/data/projects/{project_id}/segments.json"
+        if os.path.exists(segments_file):
+            try:
+                with open(segments_file, 'r') as f:
+                    segments_db[project_id] = json.load(f)
+                logger.info(f"Loaded segments from disk for project {project_id}")
+            except Exception as e:
+                logger.error(f"Failed to load segments from disk: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to load segments: {str(e)}")
+        else:
+            raise HTTPException(status_code=404, detail="Segments not yet generated")
 
     segments = segments_db[project_id]
 
@@ -419,8 +440,20 @@ async def export_kml(project_id: str):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Try to get from memory first
     if project_id not in segments_db:
-        raise HTTPException(status_code=404, detail="Segments not yet generated")
+        # Try to load from disk
+        segments_file = f"/app/data/projects/{project_id}/segments.json"
+        if os.path.exists(segments_file):
+            try:
+                with open(segments_file, 'r') as f:
+                    segments_db[project_id] = json.load(f)
+                logger.info(f"Loaded segments from disk for KML export of project {project_id}")
+            except Exception as e:
+                logger.error(f"Failed to load segments from disk: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to load segments: {str(e)}")
+        else:
+            raise HTTPException(status_code=404, detail="Segments not yet generated")
 
     try:
         project = projects_db[project_id]

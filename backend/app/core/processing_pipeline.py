@@ -286,15 +286,35 @@ class ProcessingPipeline:
         )
 
         # Build visibility sets and filter to polygon
-        visibility_sets = {}
+        # Prepare polygon once for faster contains checks
+        from shapely.prepared import prep
+        from shapely.geometry import shape
+        geom = shape(proj_polygon)
+        prepared_polygon = prep(geom)
 
-        for idx, visible_cells, visible_area in viewshed_results:
-            # Filter to polygon
+        visibility_sets = {}
+        total_viewsheds = len(viewshed_results)
+
+        logger.info(f"Filtering {total_viewsheds} viewsheds to polygon...")
+
+        for i, (idx, visible_cells, visible_area) in enumerate(viewshed_results):
+            # Filter to polygon using prepared geometry
             filtered_cells = viewshed_engine.filter_visible_cells_by_polygon(
                 visible_cells,
-                proj_polygon
+                proj_polygon,
+                prepared_polygon=prepared_polygon
             )
             visibility_sets[idx] = filtered_cells
+
+            # Report progress every 50 viewsheds
+            if (i + 1) % 50 == 0 or (i + 1) == total_viewsheds:
+                if self.progress_callback:
+                    # Map filtering progress from 80% to 80% (quick step between viewshed and segmentation)
+                    self.progress_callback(
+                        f"Filtering viewsheds to polygon... ({i+1}/{total_viewsheds})",
+                        80
+                    )
+                logger.info(f"Filtered {i+1}/{total_viewsheds} viewsheds to polygon")
 
         # Log filtering results
         total_filtered_cells = sum(len(cells) for cells in visibility_sets.values())

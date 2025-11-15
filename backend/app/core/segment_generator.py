@@ -114,6 +114,15 @@ class SegmentGenerator:
 
         logger.info(f"Total segments generated: {len(segments)}")
 
+        # Split oversized segments if preferred size is specified
+        if preferred_size_cells:
+            segments = self._split_oversized_segments(
+                segments,
+                preferred_size_cells,
+                max_ratio=2.5  # Split if segment is 2.5x+ the preferred size
+            )
+            logger.info(f"After splitting oversized segments: {len(segments)} segments")
+
         # Add metadata
         result_segments = []
         for idx, (point_id, covered_cells) in enumerate(segments):
@@ -124,6 +133,68 @@ class SegmentGenerator:
                 'access_type': access_classification.get(point_id, 'none'),
                 'cell_count': len(covered_cells)
             })
+
+        return result_segments
+
+    def _split_oversized_segments(
+        self,
+        segments: List[Tuple[int, Set[int]]],
+        preferred_size_cells: int,
+        max_ratio: float = 2.5
+    ) -> List[Tuple[int, Set[int]]]:
+        """
+        Split segments that are significantly larger than the preferred size.
+
+        This ensures segments stay close to the target size, improving operational
+        planning and workload distribution.
+
+        Args:
+            segments: List of (point_id, covered_cells) tuples
+            preferred_size_cells: Target segment size in cells
+            max_ratio: Split segments larger than this ratio of preferred size
+
+        Returns:
+            Updated list with oversized segments split into multiple segments
+        """
+        result_segments = []
+        split_count = 0
+
+        for point_id, covered_cells in segments:
+            cell_count = len(covered_cells)
+            threshold = int(preferred_size_cells * max_ratio)
+
+            # If segment is within acceptable range, keep as-is
+            if cell_count <= threshold:
+                result_segments.append((point_id, covered_cells))
+                continue
+
+            # Calculate how many segments to split into
+            num_splits = max(2, int(cell_count / preferred_size_cells + 0.5))
+            target_size_per_split = cell_count // num_splits
+
+            logger.info(
+                f"Splitting segment at point {point_id}: {cell_count} cells "
+                f"({cell_count/preferred_size_cells:.1f}x preferred) into {num_splits} segments "
+                f"of ~{target_size_per_split} cells each"
+            )
+
+            # Convert to list for indexing
+            cells_list = list(covered_cells)
+
+            # Simple approach: divide cells roughly equally
+            # In the future, could use spatial clustering for better results
+            for i in range(num_splits):
+                start_idx = i * target_size_per_split
+                end_idx = (i + 1) * target_size_per_split if i < num_splits - 1 else len(cells_list)
+                split_cells = set(cells_list[start_idx:end_idx])
+
+                if split_cells:  # Only add non-empty splits
+                    result_segments.append((point_id, split_cells))
+
+            split_count += 1
+
+        if split_count > 0:
+            logger.info(f"Split {split_count} oversized segments")
 
         return result_segments
 
@@ -211,15 +282,19 @@ class SegmentGenerator:
                 # Score based on coverage
                 score = coverage_count
 
-                # Penalize if too large (if preferred size specified)
-                if preferred_size_cells and coverage_count > preferred_size_cells * 1.5:
-                    score *= 0.8
-
-                # Bonus for being close to preferred size
+                # Apply size-based penalties/bonuses if preferred size specified
                 if preferred_size_cells:
                     size_ratio = coverage_count / preferred_size_cells
-                    if 0.7 <= size_ratio <= 1.3:
-                        score *= 1.2
+
+                    # Strong penalty for segments that are too large
+                    if size_ratio > 2.0:
+                        score *= 0.3  # Heavily penalize very large segments
+                    elif size_ratio > 1.5:
+                        score *= 0.6  # Moderate penalty for large segments
+
+                    # Bonus for being close to preferred size
+                    elif 0.8 <= size_ratio <= 1.3:
+                        score *= 1.3  # Reward segments near target size
 
                 if score > best_score:
                     best_score = score
