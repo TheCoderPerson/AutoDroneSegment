@@ -4,7 +4,8 @@ Segment Polygon Constructor.
 Converts visibility cell sets into actual polygon geometries.
 """
 from typing import Set, List, Tuple, Dict
-from shapely.geometry import box, Point, Polygon, MultiPolygon, mapping
+from shapely.geometry import box, Point, Polygon, MultiPolygon, mapping, shape
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 import logging
 
@@ -24,6 +25,50 @@ class PolygonBuilder:
         """
         self.dem_processor = dem_processor
         self.progress_callback = progress_callback
+
+    def _ensure_single_polygon(self, geom: BaseGeometry, segment_id: str = "") -> Polygon:
+        """
+        Ensure geometry is a single Polygon by selecting the largest part if MultiPolygon.
+
+        CHANGE: Added helper function to force single-part polygon output.
+        This prevents segments from being MultiPolygons (disconnected pieces).
+
+        Args:
+            geom: Input geometry (Polygon or MultiPolygon)
+            segment_id: Optional segment identifier for logging
+
+        Returns:
+            Single Polygon (largest part if input was MultiPolygon)
+        """
+        from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon as ShapelyMultiPolygon
+
+        if isinstance(geom, ShapelyPolygon):
+            return geom
+        elif isinstance(geom, ShapelyMultiPolygon):
+            # Pick the largest part by area
+            parts_with_area = [(p, p.area) for p in geom.geoms]
+            parts_with_area.sort(key=lambda x: x[1], reverse=True)
+
+            largest_part = parts_with_area[0][0]
+            largest_area = parts_with_area[0][1]
+            total_area = geom.area
+
+            # Log the conversion
+            num_parts = len(parts_with_area)
+            discarded_area = sum(area for _, area in parts_with_area[1:])
+            discarded_pct = (discarded_area / total_area * 100) if total_area > 0 else 0
+
+            logger.info(
+                f"Segment {segment_id}: Converted MultiPolygon of {num_parts} parts "
+                f"to single Polygon. Kept largest part ({largest_area:.0f} m²), "
+                f"discarded {num_parts - 1} part(s) ({discarded_area:.0f} m², {discarded_pct:.1f}%)"
+            )
+
+            return largest_part
+        else:
+            # If it's neither Polygon nor MultiPolygon, try to convert
+            logger.warning(f"Segment {segment_id}: Unexpected geometry type {type(geom).__name__}, attempting conversion")
+            return ShapelyPolygon(geom.exterior) if hasattr(geom, 'exterior') else geom
 
     def remove_holes(self, polygon, min_hole_area=100):
         """
@@ -66,6 +111,7 @@ class PolygonBuilder:
         """
         Consolidate MultiPolygons by removing small disconnected parts.
 
+        CHANGE: Now always returns a single Polygon (not MultiPolygon).
         This fixes the issue where overlap removal creates tiny disconnected pieces
         of one segment inside or near other segments. Small parts are removed to
         ensure each segment is a single contiguous polygon.
@@ -76,7 +122,7 @@ class PolygonBuilder:
             min_part_ratio: Minimum ratio of part area to total area (default 5%)
 
         Returns:
-            Polygon or consolidated MultiPolygon with only significant parts
+            Single Polygon (largest part if multiple parts remain after filtering)
         """
         from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon as ShapelyMultiPolygon
 
@@ -117,14 +163,19 @@ class PolygonBuilder:
                     f"totaling {removed_area:.0f} m² ({removed_area/total_area*100:.1f}% of segment)"
                 )
 
-            # Return appropriate geometry
+            # CHANGE: Always return a single Polygon (pick largest if multiple remain)
             if len(kept_parts) == 0:
-                logger.warning("All parts removed during consolidation, keeping original")
-                return polygon
+                logger.warning("All parts removed during consolidation, keeping largest original part")
+                return parts_with_area[0][0]  # Return largest original part
             elif len(kept_parts) == 1:
                 return kept_parts[0]  # Single polygon
             else:
-                return ShapelyMultiPolygon(kept_parts)
+                # Multiple parts remain - pick the largest
+                logger.info(
+                    f"Multiple parts ({len(kept_parts)}) remain after filtering. "
+                    f"Selecting largest part ({kept_parts[0].area:.0f} m²) to ensure single Polygon."
+                )
+                return kept_parts[0]
 
         return polygon
 
@@ -256,6 +307,16 @@ class PolygonBuilder:
         # Remove small holes to ensure solid segments
         clipped_polygon = self.remove_holes(clipped_polygon, min_hole_area=100)
 
+        # CHANGE: Ensure final geometry is a single Polygon (not MultiPolygon)
+        # This is critical to prevent segments from having disconnected pieces
+        from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+        if isinstance(clipped_polygon, ShapelyMultiPolygon):
+            logger.info(
+                f"Final polygon is MultiPolygon with {len(clipped_polygon.geoms)} parts. "
+                f"Converting to single Polygon."
+            )
+            clipped_polygon = self._ensure_single_polygon(clipped_polygon, "final")
+
         # Convert to GeoJSON
         return mapping(clipped_polygon)
 
@@ -341,6 +402,13 @@ class PolygonBuilder:
         # Remove overlaps between segments
         result_segments = self._remove_overlaps(result_segments)
 
+        # CHANGE: Remove nested segments (islands) after overlap removal
+        # This ensures no segment contains another segment wholly inside it
+        result_segments = self._remove_nested_segments(result_segments)
+
+        # CHANGE: Validate that all segments are single Polygons (not MultiPolygons)
+        result_segments = self._validate_single_polygons(result_segments)
+
         return result_segments
 
     def _remove_overlaps(self, segments: List[Dict]) -> List[Dict]:
@@ -384,14 +452,13 @@ class PolygonBuilder:
 
                 # Update segment with non-overlapping polygon
                 if not non_overlapping.is_empty:
-                    # Handle case where difference creates MultiPolygon
+                    # CHANGE: Handle case where difference creates MultiPolygon
                     from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
                     if isinstance(non_overlapping, ShapelyMultiPolygon):
                         logger.info(
                             f"Segment {segment['sequence']}: overlap removal created "
                             f"MultiPolygon with {len(non_overlapping.geoms)} parts"
                         )
-                        # Keep all parts to maintain coverage
 
                     # Fix invalid geometry if needed
                     if not non_overlapping.is_valid:
@@ -402,12 +469,21 @@ class PolygonBuilder:
                     non_overlapping = self.remove_holes(non_overlapping, min_hole_area=100)
 
                     # Consolidate MultiPolygons by removing small disconnected parts
+                    # CHANGE: This now always returns a single Polygon
                     # This prevents tiny islands of one segment appearing inside others
                     non_overlapping = self.consolidate_multipolygon(
                         non_overlapping,
                         min_part_area=1000,  # 1000 m² ≈ 0.25 acres
                         min_part_ratio=0.05   # 5% of segment area
                     )
+
+                    # CHANGE: Double-check that result is a single Polygon
+                    # If still MultiPolygon after consolidation, force to single polygon
+                    if isinstance(non_overlapping, ShapelyMultiPolygon):
+                        non_overlapping = self._ensure_single_polygon(
+                            non_overlapping,
+                            f"Segment {segment['sequence']}"
+                        )
 
                     # Recalculate area after consolidation
                     new_area = non_overlapping.area
@@ -435,6 +511,158 @@ class PolygonBuilder:
         )
 
         return processed_segments
+
+    def _remove_nested_segments(self, segments: List[Dict]) -> List[Dict]:
+        """
+        Remove nested segments (islands) where one segment is completely within another.
+
+        CHANGE: Added to ensure no segment has another segment contained wholly inside it.
+        This prevents island scenarios where segment B is fully inside segment A.
+
+        Args:
+            segments: List of segment dictionaries with polygons
+
+        Returns:
+            List of segments with nested relationships resolved
+        """
+        logger.info("Checking for nested segments (islands)...")
+
+        from shapely.geometry import shape
+
+        # Track modifications
+        modifications = []
+
+        # Check each pair of segments for containment
+        for i, seg_outer in enumerate(segments):
+            poly_outer = shape(seg_outer['polygon'])
+
+            for j, seg_inner in enumerate(segments):
+                if i == j:
+                    continue  # Skip self
+
+                poly_inner = shape(seg_inner['polygon'])
+
+                # Check if inner segment is completely within outer segment
+                if poly_inner.within(poly_outer) or poly_outer.contains(poly_inner):
+                    # Segment is nested - subtract inner from outer
+                    logger.info(
+                        f"Nested segment detected: Segment {seg_inner['sequence']} "
+                        f"is within Segment {seg_outer['sequence']}. "
+                        f"Subtracting inner segment from outer."
+                    )
+
+                    # Subtract inner polygon from outer polygon
+                    try:
+                        new_outer = poly_outer.difference(poly_inner)
+
+                        # Log the change
+                        old_area = poly_outer.area
+                        new_area = new_outer.area
+                        area_removed = old_area - new_area
+                        area_removed_pct = (area_removed / old_area * 100) if old_area > 0 else 0
+
+                        logger.info(
+                            f"Segment {seg_outer['sequence']}: Removed nested segment "
+                            f"{seg_inner['sequence']} (area reduced by {area_removed:.0f} m², "
+                            f"{area_removed_pct:.1f}%)"
+                        )
+
+                        # Ensure result is a single Polygon
+                        from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+                        if isinstance(new_outer, ShapelyMultiPolygon):
+                            logger.info(
+                                f"Segment {seg_outer['sequence']}: Subtraction created MultiPolygon, "
+                                f"converting to single Polygon"
+                            )
+                            new_outer = self._ensure_single_polygon(
+                                new_outer,
+                                f"Segment {seg_outer['sequence']}"
+                            )
+
+                        # Update outer segment
+                        seg_outer['polygon'] = mapping(new_outer)
+                        seg_outer['area_m2'] = new_outer.area
+                        seg_outer['area_acres'] = new_outer.area / 4046.86
+
+                        # Update poly_outer for next iteration
+                        poly_outer = new_outer
+
+                        modifications.append({
+                            'outer_segment': seg_outer['sequence'],
+                            'inner_segment': seg_inner['sequence'],
+                            'area_removed_m2': area_removed
+                        })
+
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to subtract nested segment {seg_inner['sequence']} "
+                            f"from segment {seg_outer['sequence']}: {e}"
+                        )
+
+        if modifications:
+            logger.info(
+                f"Nested segment removal complete: {len(modifications)} nested segment(s) removed"
+            )
+        else:
+            logger.info("No nested segments found")
+
+        return segments
+
+    def _validate_single_polygons(self, segments: List[Dict]) -> List[Dict]:
+        """
+        Validate that all segments are single Polygons (not MultiPolygons).
+
+        CHANGE: Added to ensure final validation that all segments are single polygons.
+        If any MultiPolygon is found, it will be converted to a single Polygon.
+
+        Args:
+            segments: List of segment dictionaries with polygons
+
+        Returns:
+            List of segments with all geometries validated as single Polygons
+        """
+        logger.info("Validating that all segments are single Polygons...")
+
+        from shapely.geometry import shape, MultiPolygon as ShapelyMultiPolygon
+
+        multipolygon_count = 0
+        fixed_count = 0
+
+        for segment in segments:
+            poly = shape(segment['polygon'])
+
+            # Check geometry type
+            if poly.geom_type == 'MultiPolygon' or isinstance(poly, ShapelyMultiPolygon):
+                multipolygon_count += 1
+                logger.warning(
+                    f"Segment {segment['sequence']}: Found MultiPolygon in final validation! "
+                    f"This should not happen. Converting to single Polygon."
+                )
+
+                # Force conversion to single polygon
+                poly = self._ensure_single_polygon(poly, f"Segment {segment['sequence']}")
+
+                # Update segment
+                segment['polygon'] = mapping(poly)
+                segment['area_m2'] = poly.area
+                segment['area_acres'] = poly.area / 4046.86
+                fixed_count += 1
+
+            elif poly.geom_type != 'Polygon':
+                logger.error(
+                    f"Segment {segment['sequence']}: Unexpected geometry type '{poly.geom_type}'. "
+                    f"Expected 'Polygon'."
+                )
+
+        if multipolygon_count > 0:
+            logger.warning(
+                f"Validation found and fixed {fixed_count} MultiPolygon(s) that should have been "
+                f"converted earlier in the pipeline."
+            )
+        else:
+            logger.info("All segments validated: all are single Polygons ✓")
+
+        return segments
 
     def transform_segments_to_wgs84(
         self,
