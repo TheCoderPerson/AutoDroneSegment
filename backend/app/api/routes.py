@@ -5,9 +5,10 @@ import os
 import uuid
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import List
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 import logging
 
@@ -23,6 +24,9 @@ router = APIRouter()
 projects_db = {}
 segments_db = {}
 pipeline_instances = {}  # Store pipeline instances for cancellation
+
+# Thread pool for running async tasks in background
+executor = ThreadPoolExecutor(max_workers=4)
 
 
 @router.post("/projects", response_model=ProjectResponse)
@@ -122,13 +126,12 @@ async def upload_dem(
 
 
 @router.post("/projects/{project_id}/calculate")
-async def calculate_segments(project_id: str, background_tasks: BackgroundTasks):
+async def calculate_segments(project_id: str):
     """
     Calculate search segments for a project.
 
     Args:
         project_id: Project UUID
-        background_tasks: Background task manager
 
     Returns:
         Processing status message
@@ -150,8 +153,9 @@ async def calculate_segments(project_id: str, background_tasks: BackgroundTasks)
     # Update status
     projects_db[project_id]['status'] = 'processing'
 
-    # Start processing in background
-    background_tasks.add_task(process_project, project_id)
+    # Start processing in background using thread pool
+    # This ensures asyncio.run() has its own event loop context
+    executor.submit(process_project, project_id)
 
     return {
         "message": "Processing started",

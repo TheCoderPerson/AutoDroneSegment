@@ -263,7 +263,7 @@ function MainLayout() {
                     sx={{ height: 10, borderRadius: 5, mt: 1 }}
                   />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    {progress}% (Debug: loading={loading.toString()}, progress={progress})
+                    {progress}%
                   </Typography>
                 </Box>
 
