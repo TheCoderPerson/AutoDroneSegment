@@ -411,6 +411,14 @@ class PolygonBuilder:
         # Uses union instead of subtraction to prevent holes
         result_segments = self._absorb_nested_segments(result_segments)
 
+        # CHANGE: Fill any remaining gaps inside the search polygon
+        # by assigning each gap to the nearest segment
+        # This ensures complete coverage: union(all segments) = search polygon
+        result_segments = self._fill_gaps_with_nearest_segment(
+            result_segments,
+            search_polygon_geojson
+        )
+
         # CHANGE: Validate that all segments are single Polygons (not MultiPolygons)
         result_segments = self._validate_single_polygons(result_segments)
 
@@ -761,6 +769,158 @@ class PolygonBuilder:
             )
         else:
             logger.info("No nested island segments found")
+
+        return segments
+
+    def _fill_gaps_with_nearest_segment(
+        self,
+        segments: List[Dict],
+        search_polygon_geojson: dict,
+        min_gap_area: float = 0.0
+    ) -> List[Dict]:
+        """
+        Fill uncovered gaps inside the search polygon by assigning each gap
+        polygon to the nearest segment.
+
+        CHANGE: New method to ensure complete coverage of search polygon.
+        This ensures the entire search polygon is fully partitioned by segments,
+        even if some areas were not covered by any viewshed / segment due to
+        discretization, overlap-removal, or simplification.
+
+        Args:
+            segments: List of segment dictionaries with polygons
+            search_polygon_geojson: Original search polygon (project CRS)
+            min_gap_area: Minimum gap area (m²) to bother filling
+                          (use >0 to ignore tiny numerical slivers)
+
+        Returns:
+            Updated list of segments with gaps filled
+        """
+        from shapely.geometry import shape, MultiPolygon as ShapelyMultiPolygon, Polygon as ShapelyPolygon
+        from shapely.ops import unary_union
+
+        logger.info("Filling uncovered gaps inside search polygon...")
+
+        if not segments:
+            logger.warning("No segments provided to fill gaps.")
+            return segments
+
+        # Build search polygon
+        search_poly = shape(search_polygon_geojson)
+        search_area = search_poly.area
+
+        # Build union of all segment polygons
+        segment_polys = [shape(seg['polygon']) for seg in segments]
+        coverage_union = unary_union(segment_polys)
+
+        # Gaps = search area not covered by any segment
+        gaps = search_poly.difference(coverage_union)
+
+        # Normalize gaps into a list of Polygon objects
+        gap_polygons: List[ShapelyPolygon] = []
+
+        if isinstance(gaps, ShapelyPolygon):
+            gap_polygons = [gaps]
+        elif isinstance(gaps, ShapelyMultiPolygon):
+            gap_polygons = list(gaps.geoms)
+        elif gaps.is_empty:
+            gap_polygons = []
+        else:
+            # GeometryCollection or other: keep only polygonal parts
+            try:
+                gap_polygons = [g for g in gaps.geoms if isinstance(g, ShapelyPolygon)]
+            except Exception:
+                gap_polygons = []
+
+        if not gap_polygons:
+            logger.info("No gaps found inside search polygon – nothing to fill.")
+            return segments
+
+        # Filter by minimum area if requested
+        filtered_gaps = []
+        total_gap_area = 0.0
+
+        for g in gap_polygons:
+            ga = g.area
+            if ga <= 0:
+                continue
+            if ga < min_gap_area:
+                # tiny numerical sliver
+                continue
+            filtered_gaps.append(g)
+            total_gap_area += ga
+
+        if not filtered_gaps:
+            logger.info("Only tiny gaps below threshold found – nothing to fill.")
+            return segments
+
+        logger.info(
+            f"Found {len(filtered_gaps)} gap polygon(s) inside search area, "
+            f"total gap area {total_gap_area:.1f} m² "
+            f"({(total_gap_area / search_area * 100.0 if search_area > 0 else 0):.3f}%). "
+            "Assigning each gap to nearest segment..."
+        )
+
+        # For distance checks, pre-materialize shapely polygons
+        shapely_segments = [shape(seg['polygon']) for seg in segments]
+
+        filled_gap_count = 0
+        filled_area_total = 0.0
+
+        for gap in filtered_gaps:
+            gap_area = gap.area
+            gap_centroid = gap.centroid
+
+            # Find nearest segment to this gap
+            min_dist = float("inf")
+            nearest_idx = None
+
+            for idx, poly in enumerate(shapely_segments):
+                d = poly.distance(gap_centroid)
+                if d < min_dist:
+                    min_dist = d
+                    nearest_idx = idx
+
+            if nearest_idx is None:
+                logger.warning("Could not find nearest segment for a gap; skipping.")
+                continue
+
+            # Union gap into nearest segment
+            try:
+                target_poly = shapely_segments[nearest_idx]
+                merged = target_poly.union(gap)
+
+                # Ensure single polygon
+                if isinstance(merged, ShapelyMultiPolygon):
+                    merged = self._ensure_single_polygon(
+                        merged,
+                        f"GapFill->Segment {segments[nearest_idx]['sequence']}"
+                    )
+
+                # Update segment geometry + cached shapely polygon
+                shapely_segments[nearest_idx] = merged
+                segments[nearest_idx]['polygon'] = mapping(merged)
+                segments[nearest_idx]['area_m2'] = merged.area
+                segments[nearest_idx]['area_acres'] = merged.area / 4046.86
+
+                filled_gap_count += 1
+                filled_area_total += gap_area
+
+                logger.info(
+                    f"Assigned gap (area {gap_area:.1f} m²) to nearest Segment "
+                    f"{segments[nearest_idx]['sequence']} (distance {min_dist:.2f} m)."
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to union gap into Segment "
+                    f"{segments[nearest_idx]['sequence']}: {e}"
+                )
+
+        logger.info(
+            f"Gap filling complete: {filled_gap_count} gap polygon(s) filled, "
+            f"total added area {filled_area_total:.1f} m²."
+        )
 
         return segments
 
